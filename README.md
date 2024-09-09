@@ -1,24 +1,27 @@
 # GLMGEX
+
 GLMGEX: A tool for epistasis and gene-environment interaction association analysis in discrete traits
 
 # Package installation
-The current GitHub version of GLMGEX can be installed via:
 
+The current GitHub version of GLMGEX can be installed via:
+```
 library(devtools)
 install_github("jojolubi/GLMGEX")
-
+```
 If your Rstudio does not have the devtools package, you can download the zip file and install it locally：
-
+```
 install.packages("path/to/package_name", repos = NULL, type = "source")
-
+```
 snpStats can be downloaded as follows：
-
+```
 if (!require("BiocManager", quietly = TRUE))
     install.packages("BiocManager")
 BiocManager::install("snpStats")
-
+```
 # Example
-# Load packages ----------------------------------------------------------------
+```
+#Load packages ----------------------------------------------------------------
 
 library(GLMGEX)
 library(snpStats)
@@ -132,11 +135,12 @@ raae1 <- epi.snp.estimate(significantASNP = sig,phenotype = y, covariates = cov,
 # Significant markers obtained by 1D scanning screening
 sigs <- ra1[["gwas1D"]][,1]
 
-# Calculate p-value
+#Calculate p-value
 raa <- epi.snp.score(significantASNP = sigs, phenotype = "y_binomial",covariates = "cov1+cov2",data = phe1,genodata = Ga,map = map,family = "binomial",
                      parallel = T, num_threads = 4,filename = "gwasp2s.txt")
 ps2 <- raa$p_values
 
-# Screen for significant markers and estimate parameters
+#Screen for significant markers and estimate parameters
 raa1 <- epi.snp.estimate(significantASNP = sigs,phenotype = "y_binomial",covariates = "cov1+cov2",data = phe1,genodata = Ga,map = map,Pvalues = ps2,
                          Bonferr = 0.5, family = "binomial",lasso = T,estimate = T)
+```
