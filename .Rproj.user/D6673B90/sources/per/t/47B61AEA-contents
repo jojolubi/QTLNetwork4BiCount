@@ -1,0 +1,1027 @@
+#高斯
+n <- 500
+m <- 200
+repetitions <- 100
+environment <- rep(c(rep(0, n), rep(1, n)), 1)
+X1 <- rbinom(n, 1, 0.5)
+X2 <- rnorm(n, 0, 1)
+X <- cbind(X1, X2)
+X <- rbind(X,X)
+
+coldx <- c("SNP25","SNP67", "SNP124", "SNP185")
+coldp <- c("SNP25:0","SNP25:1", "SNP67:0","SNP67:1", "SNP124:0","SNP124:1", "SNP185:0","SNP185:1")
+d1x <- matrix(NA, nrow = repetitions, ncol = 4)
+d1p <- matrix(NA, nrow = repetitions, ncol = 8)
+colnames(d1x) <- coldx
+colnames(d1p) <- coldp
+num <- m*(m-1)/2
+coldx2 <- c("SNP17_SNP124","SNP46_SNP163", "SNP118_SNP200")
+coldp2 <- c("SSNP17_SNP124:0","SNP17_SNP124:1", "SNP46_SNP163:0","SNP46_SNP163:1", "SNP118_SNP200:0","SNP118_SNP200:1")
+d2x <- matrix(NA, nrow = repetitions, ncol = 3)
+d2p <- matrix(NA, nrow = repetitions, ncol = 6)
+colnames(d2x) <- coldx2
+colnames(d2p) <- coldp2
+indices_a <- c(25,67,124,185)
+col_indices <- c(3171,8082 ,16579)
+h2 <- 0.6
+vpop <- sqrt(0.05)
+xc <- c(vpop,vpop)
+g_pop <- X %*% xc
+va <- sqrt(0.20)
+vah <- sqrt(0.25)
+vaa <- sqrt(0.30 )
+vaah <- sqrt(0.25 )
+start_time <- Sys.time()
+power_loose <- numeric(4)
+power_strict <- numeric(4)
+power_selection <- numeric(4)
+power_aa_loose <- numeric(3)
+power_aa_strict <- numeric(3)
+power_aa_selection <- numeric(3)
+
+f1 <- 0
+t1 <- 0
+f2 <- 0
+t2 <- 0
+f3 <- 0
+t3 <- 0
+faa1 <- 0
+taa1 <- 0
+faa2 <- 0
+taa2 <- 0
+faa3 <- 0
+taa3 <- 0
+for (rep in 1:repetitions ) {
+  Ga <- matrix(NA, n, m)
+  freq <- runif(m, 0.05, 0.5)
+  for (i in 1:m) {
+    Ga[, i] <- rbinom(n, 2, freq[i])
+    #Ga[, i] <- Ga[, i] - 1
+  }
+  Ga <- calculate_Xs(Ga)
+  colnames(Ga) <- paste0("SNP", 1:m)
+  Gaa <- matrix(NA, n, 3)
+  Gaa[, 1] <- Ga[, 17] * Ga[, 124]
+  Gaa[, 2] <- Ga[, 46] * Ga[, 163]
+  Gaa[, 3] <- Ga[, 118] * Ga[, 200]
+
+  ia <- c(25, 67, 124)
+  ba1 <- c(va,va,va)
+  ga1 <- Ga[,ia] %*% ba1
+  #ba2 <- c(va,va,va)
+  ga2 <- Ga[,ia] %*% ba1
+
+  iah <- c(67, 185)
+  bah1 <- c(-vah,-vah)
+  gah1 <- Ga[,iah] %*% bah1
+  bah2 <- c(vah,vah)
+  gah2 <- Ga[,iah] %*% bah2
+
+  baa1 <- c(vaa,vaa)
+  gaa1 <- Gaa[,c(1,3)] %*% baa1
+  baa2 <- c(vaa,vaa)
+  gaa2 <- Gaa[,c(1,3)] %*% baa2
+
+  baah1 <- c(-vaah,-vaah)
+  gaah1 <- Gaa[,c(2,3)] %*% baah1
+  baah2 <- c(vaah,vaah)
+  gaah2 <- Gaa[,c(2,3)] %*% baah2
+
+  ga <- c(ga1,ga2)
+  gah <- c(gah1,gah2)
+  gaa <- c(gaa1,gaa2)
+  gaah <- c(gaah1,gaah2)
+
+  var_e <- (1/h2 - 1) *(var(ga)+var(gah) +var(gaa) +var(gaah) )-var(g_pop)
+  error <- rnorm(2*n, sd = sqrt(var_e))
+  eta <- g_pop +ga + gah +gaa + gaah  + error
+
+  ra1 <- single.snp.score(phenotype = eta,covariate = X,environment = environment,genodata = Ga,family="gaussian")
+  p1 <- ra1$p_values
+  significant_l_indices <- which( p1 <= 0.5/m)
+  significant_s_indices <- which( p1 <= 0.1/m)
+  ra11 <- single.snp.estimate(phenotype = eta, covariate =  X,environment = environment,
+                              genodata = Ga,Pvalues = p1, Bonferr = 1, family = "gaussian",
+                              selection = TRUE,estimate = FALSE, GEI_random = FALSE)
+  if(is.null(ra11)){
+    significant_e_indices <- NULL
+  }else{
+    p1name <- ra11[["significant_SNP"]]
+    significant_e_indices <- ra11[["fin"]]
+  }
+
+  t1 <- t1 + length(significant_l_indices )
+  f1 <- f1 + length(setdiff(significant_l_indices , indices_a))
+  t2 <- t2 + length(significant_s_indices )
+  f2 <- f2 + length(setdiff(significant_s_indices , indices_a))
+  t3 <- t3 + length(significant_e_indices )
+  f3 <- f3 + length(setdiff(significant_e_indices , indices_a))
+  #significant_e_indices <- match(p1name, colnames(Ga))
+  if (length(significant_e_indices) > 0) {
+    raa2 <- epi.snp.score(significantASNP = p1name, phenotype = eta,covariate = X,environment = environment,genodata = Ga, family="gaussian")
+    p2 <- raa2$p_values
+    raa22 <- epi.snp.estimate(significantASNP = p1name, phenotype = eta, covariate =  X,
+                              environment = environment, genodata = Ga,Pvalues = p2, Bonferr = 0.5,
+                              family = "gaussian", selection = TRUE,estimate = TRUE,GEI_random = TRUE)
+  }else{
+    raa2 <- epi.snp.score(phenotype = eta,covariate = X,environment = environment,genodata = Ga, family="gaussian")
+    p2 <- raa2$p_values
+    raa22 <- epi.snp.estimate(phenotype = eta, covariate =  X,environment = environment,
+                              genodata = Ga,Pvalues = p2, Bonferr = 0.5, family = "gaussian",
+                              selection = TRUE,estimate =TRUE, GEI_random = TRUE)
+  }
+  if(is.null(raa22)){
+    significant_aa_e_indices <- NULL
+  }else{
+    significant_aa_e_indices <- raa22[["fin"]]
+    fixp <- raa22[["fix_coefficients"]]
+    randomp <- raa22[["random_coefficients"]]
+
+    fixname <- names(fixp)
+    raname <- names(randomp)
+
+    for (i in 1:length(coldx)) {
+      idx <- match(coldx[i], fixname)
+      if (!is.na(idx)) {
+        d1x[rep, i] <- fixp[idx]
+      }
+    }
+    for (i in 1:length(coldx2)) {
+      idx <- match(coldx2[i], fixname)
+      if (!is.na(idx)) {
+        d2x[rep, i] <- fixp[idx]
+      }
+    }
+
+    for (i in 1:length(coldp)) {
+      idx <- match(coldp[i], raname)
+      if (!is.na(idx)) {
+        d1p[rep, i] <- randomp[idx]
+      }
+    }
+    for (i in 1:length(coldp2)) {
+      idx <- match(coldp2[i], raname)
+      if (!is.na(idx)) {
+        d2p[rep, i] <- randomp[idx]
+      }
+    }
+  }
+  significant_aa_l_indices <- which( p2 <= 0.5/num)
+  significant_aa_s_indices <- which( p2 <= 0.1/num)
+  taa1 <- taa1 + length(significant_aa_l_indices )
+  faa1 <- faa1 + length(setdiff(significant_aa_l_indices , col_indices))
+  taa2 <- taa2 + length(significant_aa_s_indices )
+  faa2 <- faa2 + length(setdiff(significant_aa_s_indices , col_indices))
+  taa3 <- taa3+ length(significant_aa_e_indices )
+  faa3 <- faa3 + length(setdiff(significant_aa_e_indices , col_indices))
+
+  for (j in 1:length(indices_a)) {
+    if (indices_a[j] %in% significant_l_indices) {
+      power_loose[j] <- power_loose[j] + 1
+    }
+  }
+  for (j in 1:length(indices_a)) {
+    if (indices_a[j] %in% significant_s_indices) {
+      power_strict[j] <- power_strict[j] + 1
+    }
+  }
+  for (j in 1:length(indices_a)) {
+    if (indices_a[j] %in% significant_e_indices) {
+      power_selection[j] <- power_selection[j] + 1
+    }
+  }
+  for (j in 1:length(col_indices)) {
+    if (col_indices[j] %in% significant_aa_l_indices) {
+      power_aa_loose[j] <- power_aa_loose[j] + 1
+    }
+  }
+  for (j in 1:length(col_indices)) {
+    if (col_indices[j] %in% significant_aa_s_indices) {
+      power_aa_strict[j] <- power_aa_strict[j] + 1
+    }
+  }
+  for (j in 1:length(col_indices)) {
+    if (col_indices[j] %in% significant_aa_e_indices) {
+      power_aa_selection[j] <- power_aa_selection[j] + 1
+    }
+  }
+
+}
+power_loose <- power_loose / repetitions
+power_strict <- power_strict / repetitions
+power_selection <- power_selection / repetitions
+power_aa_loose <- power_aa_loose / repetitions
+power_aa_strict <- power_aa_strict / repetitions
+power_aa_selection <- power_aa_selection / repetitions
+
+print(power_loose)
+print(power_strict)
+print(power_selection)
+print(power_aa_loose)
+print(power_aa_strict)
+print(power_aa_selection)
+
+fpr1 <- f1 / t1
+fpr2 <- f2 / t2
+fpr3 <- f3 / t3
+fpraa1 <- faa1 / taa1
+fpraa2 <- faa2 / taa2
+fpraa3 <- faa3 / taa3
+
+print(fpr1 )
+print(fpr2 )
+print(fpr3 )
+print(fpraa1 )
+print(fpraa2 )
+print(fpraa3 )
+
+end_time <- Sys.time()  # 记录结束时间
+execution_time <- end_time - start_time  # 计算执行时间
+# 打印执行时间
+print(execution_time)
+# 计算 d1x 每列的平均值
+colMeans(d1x, na.rm = TRUE)
+# 计算 d1x 每列的标准误差
+apply(d1x, 2, function(x) sd(x, na.rm = TRUE) / sqrt(length(x)))
+# 计算 d1p 每列的平均值
+colMeans(d1p, na.rm = TRUE)
+# 计算 d1p 每列的标准误差
+apply(d1p, 2, function(x) sd(x, na.rm = TRUE) / sqrt(length(x)))
+# 计算 d2x 每列的平均值
+colMeans(d2x, na.rm = TRUE)
+# 计算 d2x 每列的标准误差
+apply(d2x, 2, function(x) sd(x, na.rm = TRUE) / sqrt(length(x)))
+# 计算 d2p 每列的平均值
+colMeans(d2p, na.rm = TRUE)
+# 计算 d2p 每列的标准误差
+apply(d2p, 2, function(x) sd(x, na.rm = TRUE) / sqrt(length(x)))
+
+#伯努利
+n <- 500
+m <- 200
+repetitions <- 100
+environment <- rep(c(rep(0, n), rep(1, n)), 1)
+X1 <- rbinom(n, 1, 0.5)
+X2 <- rnorm(n, 0, 1)
+X <- cbind(X1, X2)
+X <- rbind(X,X)
+preval <- 0.1
+beta0 <- matrix(preval,2*n,1)
+coldx <- c("SNP25","SNP67", "SNP124", "SNP185")
+coldp <- c("SNP25:0","SNP25:1", "SNP67:0","SNP67:1", "SNP124:0","SNP124:1", "SNP185:0","SNP185:1")
+d1x <- matrix(NA, nrow = repetitions, ncol = 4)
+d1p <- matrix(NA, nrow = repetitions, ncol = 8)
+colnames(d1x) <- coldx
+colnames(d1p) <- coldp
+num <- m*(m-1)/2
+coldx2 <- c("SNP17_SNP124","SNP46_SNP163", "SNP118_SNP200")
+coldp2 <- c("SSNP17_SNP124:0","SNP17_SNP124:1", "SNP46_SNP163:0","SNP46_SNP163:1", "SNP118_SNP200:0","SNP118_SNP200:1")
+d2x <- matrix(NA, nrow = repetitions, ncol = 3)
+d2p <- matrix(NA, nrow = repetitions, ncol = 6)
+colnames(d2x) <- coldx2
+colnames(d2p) <- coldp2
+indices_a <- c(25,67,124,185)
+col_indices <- c(3171,8082 ,16579)
+
+# va <- sqrt((0.20 * h2))
+# vah <- sqrt((0.25 * h2 ))
+# vaa <- sqrt((0.30 * h2 ))
+# vaah <- sqrt((0.25 * h2 ))
+# va <- sqrt((0.20 * h2 *3.23)/(1-0.20 * h2))
+# vah <- sqrt((0.25 * h2 *3.23)/(1-0.25 * h2))
+# vaa <- sqrt((0.30 * h2 *3.23)/(1-0.30 * h2))
+# vaah <- sqrt((0.25 * h2 *3.23)/(1-0.25 * h2))
+# al <- (h2 * 3.23) / (1 - h2)
+# va <- sqrt((0.20 * al))
+# vah <- sqrt((0.25 * al))
+# vaa <- sqrt((0.30 * al))
+# vaah <- sqrt((0.25 * al))
+h2 <- 0.6
+vpop <- sqrt(0.05)
+xc <- c(vpop,vpop)
+g_pop <- X %*% xc
+
+al <- (h2 * 3.23) / (1 - h2)
+va <- sqrt((0.20 * al))
+vah <- sqrt((0.25 * al))
+vaa <- sqrt((0.30 * al))
+vaah <- sqrt((0.25 * al))
+start_time <- Sys.time()
+power_loose <- numeric(4)
+power_strict <- numeric(4)
+power_selection <- numeric(4)
+power_aa_loose <- numeric(3)
+power_aa_strict <- numeric(3)
+power_aa_selection <- numeric(3)
+
+f1 <- 0
+t1 <- 0
+f2 <- 0
+t2 <- 0
+f3 <- 0
+t3 <- 0
+faa1 <- 0
+taa1 <- 0
+faa2 <- 0
+taa2 <- 0
+faa3 <- 0
+taa3 <- 0
+for (rep in 1:repetitions ) {
+  Ga <- matrix(NA, n, m)
+  freq <- runif(m, 0.05, 0.5)
+  for (i in 1:m) {
+    Ga[, i] <- rbinom(n, 2, freq[i])
+    #Ga[, i] <- Ga[, i] - 1
+  }
+  Ga <- calculate_Xs(Ga)
+  colnames(Ga) <- paste0("SNP", 1:m)
+  Gaa <- matrix(NA, n, 3)
+  Gaa[, 1] <- Ga[, 17] * Ga[, 124]
+  Gaa[, 2] <- Ga[, 46] * Ga[, 163]
+  Gaa[, 3] <- Ga[, 118] * Ga[, 200]
+
+  ia <- c(25, 67, 124)
+  ba1 <- c(va,va,va)
+  ga1 <- Ga[,ia] %*% ba1
+  #ba2 <- c(va,va,va)
+  ga2 <- Ga[,ia] %*% ba1
+
+  iah <- c(67, 185)
+  bah1 <- c(-vah,-vah)
+  gah1 <- Ga[,iah] %*% bah1
+  bah2 <- c(vah,vah)
+  gah2 <- Ga[,iah] %*% bah2
+
+  baa1 <- c(vaa,vaa)
+  gaa1 <- Gaa[,c(1,3)] %*% baa1
+  baa2 <- c(vaa,vaa)
+  gaa2 <- Gaa[,c(1,3)] %*% baa2
+
+  baah1 <- c(-vaah,-vaah)
+  gaah1 <- Gaa[,c(2,3)] %*% baah1
+  baah2 <- c(vaah,vaah)
+  gaah2 <- Gaa[,c(2,3)] %*% baah2
+
+  ga <- c(ga1,ga2)
+  gah <- c(gah1,gah2)
+  gaa <- c(gaa1,gaa2)
+  gaah <- c(gaah1,gaah2)
+
+  # var_e <- (1/h2 - 1) *(var(ga)+var(gah) +var(gaa) +var(gaah) )-var(g_pop)
+  # error <- rnorm(2*n, sd = sqrt(var_e))
+  e <- rlogis(2*n, location = 0, scale = 1)
+  y <- g_pop +ga + gah +gaa + gaah  + e
+  break_point <- quantile(y, probs = 1-preval, na.rm = T)
+  cat("prevalence is", preval, ", and the break point is", break_point, "!\n")
+  eta = rep(0, 2*n)
+  eta[y > break_point] = 1
+  # mu <- plogis(y)
+  # eta <- matrix(NA, 2*n, 1)
+  # eta[, 1] <-ifelse(mu > 0.5, 1, 0)
+  #eta[, 1] <- rbinom(n, size = 1, prob = mu)
+
+   y <- g_pop +ga + gah +gaa + gaah
+   mu <- plogis(y)
+  eta <- matrix(NA, 2*n, 1)
+  eta[, 1] <- rbinom(2*n, size = 1, prob = mu)
+
+  ra1 <- single.snp.score(phenotype = eta,covariate = X,environment = environment,genodata = Ga,family="binomial")
+  p1 <- ra1$p_values
+  significant_l_indices <- which( p1 <= 0.5/m)
+  significant_s_indices <- which( p1 <= 0.1/m)
+  ra11 <- single.snp.estimate(phenotype = eta, covariate =  X,environment = environment,
+                              genodata = Ga,Pvalues = p1, Bonferr = 1, family = "binomial",
+                              selection = TRUE,estimate = FALSE, GEI_random = FALSE)
+  if(is.null(ra11)){
+    significant_e_indices <- NULL
+  }else{
+    p1name <- ra11[["significant_SNP"]]
+    significant_e_indices <- ra11[["fin"]]
+  }
+
+  t1 <- t1 + length(significant_l_indices )
+  f1 <- f1 + length(setdiff(significant_l_indices , indices_a))
+  t2 <- t2 + length(significant_s_indices )
+  f2 <- f2 + length(setdiff(significant_s_indices , indices_a))
+  t3 <- t3 + length(significant_e_indices )
+  f3 <- f3 + length(setdiff(significant_e_indices , indices_a))
+  #significant_e_indices <- match(p1name, colnames(Ga))
+  if (length(significant_e_indices) > 0) {
+    raa2 <- epi.snp.score(significantASNP = p1name, phenotype = eta,covariate = X,environment = environment,genodata = Ga, family="binomial")
+    p2 <- raa2$p_values
+    raa22 <- epi.snp.estimate(significantASNP = p1name, phenotype = eta, covariate =  X,
+                              environment = environment, genodata = Ga,Pvalues = p2, Bonferr = 0.5,
+                              family = "binomial", selection = TRUE,estimate = TRUE,GEI_random = TRUE)
+  }else{
+    raa2 <- epi.snp.score(phenotype = eta,covariate = X,environment = environment,genodata = Ga, family="binomial")
+    p2 <- raa2$p_values
+    raa22 <- epi.snp.estimate(phenotype = eta, covariate =  X,environment = environment,
+                              genodata = Ga,Pvalues = p2, Bonferr = 0.5, family = "binomial",
+                              selection = TRUE,estimate =TRUE, GEI_random = TRUE)
+  }
+  if(is.null(raa22)){
+    significant_aa_e_indices <- NULL
+  }else{
+    significant_aa_e_indices <- raa22[["fin"]]
+    fixp <- raa22[["fix_coefficients"]]
+    randomp <- raa22[["random_coefficients"]]
+
+    fixname <- names(fixp)
+    raname <- names(randomp)
+
+    for (i in 1:length(coldx)) {
+      idx <- match(coldx[i], fixname)
+      if (!is.na(idx)) {
+        d1x[rep, i] <- fixp[idx]
+      }
+    }
+    for (i in 1:length(coldx2)) {
+      idx <- match(coldx2[i], fixname)
+      if (!is.na(idx)) {
+        d2x[rep, i] <- fixp[idx]
+      }
+    }
+
+    for (i in 1:length(coldp)) {
+      idx <- match(coldp[i], raname)
+      if (!is.na(idx)) {
+        d1p[rep, i] <- randomp[idx]
+      }
+    }
+    for (i in 1:length(coldp2)) {
+      idx <- match(coldp2[i], raname)
+      if (!is.na(idx)) {
+        d2p[rep, i] <- randomp[idx]
+      }
+    }
+  }
+  significant_aa_l_indices <- which( p2 <= 0.5/num)
+  significant_aa_s_indices <- which( p2 <= 0.1/num)
+  taa1 <- taa1 + length(significant_aa_l_indices )
+  faa1 <- faa1 + length(setdiff(significant_aa_l_indices , col_indices))
+  taa2 <- taa2 + length(significant_aa_s_indices )
+  faa2 <- faa2 + length(setdiff(significant_aa_s_indices , col_indices))
+  taa3 <- taa3+ length(significant_aa_e_indices )
+  faa3 <- faa3 + length(setdiff(significant_aa_e_indices , col_indices))
+
+  for (j in 1:length(indices_a)) {
+    if (indices_a[j] %in% significant_l_indices) {
+      power_loose[j] <- power_loose[j] + 1
+    }
+  }
+  for (j in 1:length(indices_a)) {
+    if (indices_a[j] %in% significant_s_indices) {
+      power_strict[j] <- power_strict[j] + 1
+    }
+  }
+  for (j in 1:length(indices_a)) {
+    if (indices_a[j] %in% significant_e_indices) {
+      power_selection[j] <- power_selection[j] + 1
+    }
+  }
+  for (j in 1:length(col_indices)) {
+    if (col_indices[j] %in% significant_aa_l_indices) {
+      power_aa_loose[j] <- power_aa_loose[j] + 1
+    }
+  }
+  for (j in 1:length(col_indices)) {
+    if (col_indices[j] %in% significant_aa_s_indices) {
+      power_aa_strict[j] <- power_aa_strict[j] + 1
+    }
+  }
+  for (j in 1:length(col_indices)) {
+    if (col_indices[j] %in% significant_aa_e_indices) {
+      power_aa_selection[j] <- power_aa_selection[j] + 1
+    }
+  }
+
+}
+power_loose <- power_loose / repetitions
+power_strict <- power_strict / repetitions
+power_selection <- power_selection / repetitions
+power_aa_loose <- power_aa_loose / repetitions
+power_aa_strict <- power_aa_strict / repetitions
+power_aa_selection <- power_aa_selection / repetitions
+
+print(power_loose)
+print(power_strict)
+print(power_selection)
+print(power_aa_loose)
+print(power_aa_strict)
+print(power_aa_selection)
+
+fpr1 <- f1 / t1
+fpr2 <- f2 / t2
+fpr3 <- f3 / t3
+fpraa1 <- faa1 / taa1
+fpraa2 <- faa2 / taa2
+fpraa3 <- faa3 / taa3
+
+print(fpr1 )
+print(fpr2 )
+print(fpr3 )
+print(fpraa1 )
+print(fpraa2 )
+print(fpraa3 )
+
+end_time <- Sys.time()  # 记录结束时间
+execution_time <- end_time - start_time  # 计算执行时间
+# 打印执行时间
+print(execution_time)
+# 计算 d1x 每列的平均值
+colMeans(d1x, na.rm = TRUE)
+# 计算 d1x 每列的标准误差
+apply(d1x, 2, function(x) sd(x, na.rm = TRUE) / sqrt(length(x)))
+# 计算 d1p 每列的平均值
+colMeans(d1p, na.rm = TRUE)
+# 计算 d1p 每列的标准误差
+apply(d1p, 2, function(x) sd(x, na.rm = TRUE) / sqrt(length(x)))
+# 计算 d2x 每列的平均值
+colMeans(d2x, na.rm = TRUE)
+# 计算 d2x 每列的标准误差
+apply(d2x, 2, function(x) sd(x, na.rm = TRUE) / sqrt(length(x)))
+# 计算 d2p 每列的平均值
+colMeans(d2p, na.rm = TRUE)
+# 计算 d2p 每列的标准误差
+apply(d2p, 2, function(x) sd(x, na.rm = TRUE) / sqrt(length(x)))
+
+
+#二项比例
+n <- 500
+m <- 200
+repetitions <- 100
+repeats <- 100
+vector <- rep(100, 1000)
+environment <- rep(c(rep(0, n), rep(1, n)), 1)
+X1 <- rbinom(n, 1, 0.5)
+X2 <- rnorm(n, 0, 1)
+X <- cbind(X1, X2)
+X <- rbind(X,X)
+preval <- 0.1
+beta0 <- matrix(preval,2*n,1)
+coldx <- c("SNP25","SNP67", "SNP124", "SNP185")
+coldp <- c("SNP25:0","SNP25:1", "SNP67:0","SNP67:1", "SNP124:0","SNP124:1", "SNP185:0","SNP185:1")
+d1x <- matrix(NA, nrow = repetitions, ncol = 4)
+d1p <- matrix(NA, nrow = repetitions, ncol = 8)
+colnames(d1x) <- coldx
+colnames(d1p) <- coldp
+num <- m*(m-1)/2
+coldx2 <- c("SNP17_SNP124","SNP46_SNP163", "SNP118_SNP200")
+coldp2 <- c("SSNP17_SNP124:0","SNP17_SNP124:1", "SNP46_SNP163:0","SNP46_SNP163:1", "SNP118_SNP200:0","SNP118_SNP200:1")
+d2x <- matrix(NA, nrow = repetitions, ncol = 3)
+d2p <- matrix(NA, nrow = repetitions, ncol = 6)
+colnames(d2x) <- coldx2
+colnames(d2p) <- coldp2
+indices_a <- c(25,67,124,185)
+col_indices <- c(3171,8082 ,16579)
+
+# va <- sqrt((0.20 * h2))
+# vah <- sqrt((0.25 * h2 ))
+# vaa <- sqrt((0.30 * h2 ))
+# vaah <- sqrt((0.25 * h2 ))
+# va <- sqrt((0.20 * h2 *3.23)/(1-0.20 * h2))
+# vah <- sqrt((0.25 * h2 *3.23)/(1-0.25 * h2))
+# vaa <- sqrt((0.30 * h2 *3.23)/(1-0.30 * h2))
+# vaah <- sqrt((0.25 * h2 *3.23)/(1-0.25 * h2))
+# al <- (h2 * 3.23) / (1 - h2)
+# va <- sqrt((0.20 * al))
+# vah <- sqrt((0.25 * al))
+# vaa <- sqrt((0.30 * al))
+# vaah <- sqrt((0.25 * al))
+h2 <- 0.6
+vpop <- sqrt(0.05)
+xc <- c(vpop,vpop)
+g_pop <- X %*% xc
+
+al <- (h2 * 3.23) / (1 - h2)
+va <- sqrt((0.20 * al))
+vah <- sqrt((0.25 * al))
+vaa <- sqrt((0.30 * al))
+vaah <- sqrt((0.25 * al))
+start_time <- Sys.time()
+power_loose <- numeric(4)
+power_strict <- numeric(4)
+power_selection <- numeric(4)
+power_aa_loose <- numeric(3)
+power_aa_strict <- numeric(3)
+power_aa_selection <- numeric(3)
+
+f1 <- 0
+t1 <- 0
+f2 <- 0
+t2 <- 0
+f3 <- 0
+t3 <- 0
+faa1 <- 0
+taa1 <- 0
+faa2 <- 0
+taa2 <- 0
+faa3 <- 0
+taa3 <- 0
+for (rep in 1:repetitions ) {
+  Ga <- matrix(NA, n, m)
+  freq <- runif(m, 0.05, 0.5)
+  for (i in 1:m) {
+    Ga[, i] <- rbinom(n, 2, freq[i])
+    #Ga[, i] <- Ga[, i] - 1
+  }
+  Ga <- calculate_Xs(Ga)
+  colnames(Ga) <- paste0("SNP", 1:m)
+  Gaa <- matrix(NA, n, 3)
+  Gaa[, 1] <- Ga[, 17] * Ga[, 124]
+  Gaa[, 2] <- Ga[, 46] * Ga[, 163]
+  Gaa[, 3] <- Ga[, 118] * Ga[, 200]
+
+  ia <- c(25, 67, 124)
+  ba1 <- c(va,va,va)
+  ga1 <- Ga[,ia] %*% ba1
+  #ba2 <- c(va,va,va)
+  ga2 <- Ga[,ia] %*% ba1
+
+  iah <- c(67, 185)
+  bah1 <- c(-vah,-vah)
+  gah1 <- Ga[,iah] %*% bah1
+  bah2 <- c(vah,vah)
+  gah2 <- Ga[,iah] %*% bah2
+
+  baa1 <- c(vaa,vaa)
+  gaa1 <- Gaa[,c(1,3)] %*% baa1
+  baa2 <- c(vaa,vaa)
+  gaa2 <- Gaa[,c(1,3)] %*% baa2
+
+  baah1 <- c(-vaah,-vaah)
+  gaah1 <- Gaa[,c(2,3)] %*% baah1
+  baah2 <- c(vaah,vaah)
+  gaah2 <- Gaa[,c(2,3)] %*% baah2
+
+  ga <- c(ga1,ga2)
+  gah <- c(gah1,gah2)
+  gaa <- c(gaa1,gaa2)
+  gaah <- c(gaah1,gaah2)
+
+  y <- g_pop +ga + gah +gaa + gaah
+  mu <- plogis(y)
+  eta <- matrix(NA, 2*n, 1)
+  proportions <- matrix(0, 2*n, 1)
+  for (i in 1:repeats) {
+
+    eta[, 1] <- rbinom(2 * n, size = 1, prob = mu)
+
+    # 计算每个元素为1的比例
+    proportions <- proportions + eta[, 1]
+  }
+  proportions <- proportions / repeats
+
+  ra1 <- single.snp.score(phenotype = proportions,covariate = X,environment = environment,weights=vector,genodata = Ga,family="binomial")
+  p1 <- ra1$p_values
+  significant_l_indices <- which( p1 <= 0.5/m)
+  significant_s_indices <- which( p1 <= 0.1/m)
+  ra11 <- single.snp.estimate(phenotype = proportions, covariate =  X,environment = environment,weights=vector,
+                              genodata = Ga,Pvalues = p1, Bonferr = 1, family = "binomial",
+                              selection = TRUE,estimate = FALSE, GEI_random = FALSE)
+  if(is.null(ra11)){
+    significant_e_indices <- NULL
+  }else{
+    p1name <- ra11[["significant_SNP"]]
+    significant_e_indices <- ra11[["fin"]]
+  }
+
+  t1 <- t1 + length(significant_l_indices )
+  f1 <- f1 + length(setdiff(significant_l_indices , indices_a))
+  t2 <- t2 + length(significant_s_indices )
+  f2 <- f2 + length(setdiff(significant_s_indices , indices_a))
+  t3 <- t3 + length(significant_e_indices )
+  f3 <- f3 + length(setdiff(significant_e_indices , indices_a))
+  #significant_e_indices <- match(p1name, colnames(Ga))
+  if (length(significant_e_indices) > 0) {
+    raa2 <- epi.snp.score(significantASNP = p1name, phenotype = proportions,covariate = X,environment = environment,weights=vector,genodata = Ga, family="binomial")
+    p2 <- raa2$p_values
+    raa22 <- epi.snp.estimate(significantASNP = p1name, phenotype = proportions, covariate =  X,
+                              environment = environment,weights=vector, genodata = Ga,Pvalues = p2, Bonferr = 0.5,
+                              family = "binomial", selection = TRUE,estimate = TRUE,GEI_random = TRUE)
+  }else{
+    raa2 <- epi.snp.score(phenotype = proportions,covariate = X,environment = environment,weights=vector,genodata = Ga, family="binomial")
+    p2 <- raa2$p_values
+    raa22 <- epi.snp.estimate(phenotype = proportions, covariate =  X,environment = environment,weights=vector,
+                              genodata = Ga,Pvalues = p2, Bonferr = 0.5, family = "binomial",
+                              selection = TRUE,estimate =TRUE, GEI_random = TRUE)
+  }
+  if(is.null(raa22)){
+    significant_aa_e_indices <- NULL
+  }else{
+    significant_aa_e_indices <- raa22[["fin"]]
+    fixp <- raa22[["fix_coefficients"]]
+    randomp <- raa22[["random_coefficients"]]
+
+    fixname <- names(fixp)
+    raname <- names(randomp)
+
+    for (i in 1:length(coldx)) {
+      idx <- match(coldx[i], fixname)
+      if (!is.na(idx)) {
+        d1x[rep, i] <- fixp[idx]
+      }
+    }
+    for (i in 1:length(coldx2)) {
+      idx <- match(coldx2[i], fixname)
+      if (!is.na(idx)) {
+        d2x[rep, i] <- fixp[idx]
+      }
+    }
+
+    for (i in 1:length(coldp)) {
+      idx <- match(coldp[i], raname)
+      if (!is.na(idx)) {
+        d1p[rep, i] <- randomp[idx]
+      }
+    }
+    for (i in 1:length(coldp2)) {
+      idx <- match(coldp2[i], raname)
+      if (!is.na(idx)) {
+        d2p[rep, i] <- randomp[idx]
+      }
+    }
+  }
+  significant_aa_l_indices <- which( p2 <= 0.5/num)
+  significant_aa_s_indices <- which( p2 <= 0.1/num)
+  taa1 <- taa1 + length(significant_aa_l_indices )
+  faa1 <- faa1 + length(setdiff(significant_aa_l_indices , col_indices))
+  taa2 <- taa2 + length(significant_aa_s_indices )
+  faa2 <- faa2 + length(setdiff(significant_aa_s_indices , col_indices))
+  taa3 <- taa3+ length(significant_aa_e_indices )
+  faa3 <- faa3 + length(setdiff(significant_aa_e_indices , col_indices))
+
+  for (j in 1:length(indices_a)) {
+    if (indices_a[j] %in% significant_l_indices) {
+      power_loose[j] <- power_loose[j] + 1
+    }
+  }
+  for (j in 1:length(indices_a)) {
+    if (indices_a[j] %in% significant_s_indices) {
+      power_strict[j] <- power_strict[j] + 1
+    }
+  }
+  for (j in 1:length(indices_a)) {
+    if (indices_a[j] %in% significant_e_indices) {
+      power_selection[j] <- power_selection[j] + 1
+    }
+  }
+  for (j in 1:length(col_indices)) {
+    if (col_indices[j] %in% significant_aa_l_indices) {
+      power_aa_loose[j] <- power_aa_loose[j] + 1
+    }
+  }
+  for (j in 1:length(col_indices)) {
+    if (col_indices[j] %in% significant_aa_s_indices) {
+      power_aa_strict[j] <- power_aa_strict[j] + 1
+    }
+  }
+  for (j in 1:length(col_indices)) {
+    if (col_indices[j] %in% significant_aa_e_indices) {
+      power_aa_selection[j] <- power_aa_selection[j] + 1
+    }
+  }
+
+}
+power_loose <- power_loose / repetitions
+power_strict <- power_strict / repetitions
+power_selection <- power_selection / repetitions
+power_aa_loose <- power_aa_loose / repetitions
+power_aa_strict <- power_aa_strict / repetitions
+power_aa_selection <- power_aa_selection / repetitions
+
+print(power_loose)
+print(power_strict)
+print(power_selection)
+print(power_aa_loose)
+print(power_aa_strict)
+print(power_aa_selection)
+
+fpr1 <- f1 / t1
+fpr2 <- f2 / t2
+fpr3 <- f3 / t3
+fpraa1 <- faa1 / taa1
+fpraa2 <- faa2 / taa2
+fpraa3 <- faa3 / taa3
+
+print(fpr1 )
+print(fpr2 )
+print(fpr3 )
+print(fpraa1 )
+print(fpraa2 )
+print(fpraa3 )
+
+end_time <- Sys.time()  # 记录结束时间
+execution_time <- end_time - start_time  # 计算执行时间
+# 打印执行时间
+print(execution_time)
+# 计算 d1x 每列的平均值
+colMeans(d1x, na.rm = TRUE)
+# 计算 d1x 每列的标准误差
+apply(d1x, 2, function(x) sd(x, na.rm = TRUE) / sqrt(length(x)))
+# 计算 d1p 每列的平均值
+colMeans(d1p, na.rm = TRUE)
+# 计算 d1p 每列的标准误差
+apply(d1p, 2, function(x) sd(x, na.rm = TRUE) / sqrt(length(x)))
+# 计算 d2x 每列的平均值
+colMeans(d2x, na.rm = TRUE)
+# 计算 d2x 每列的标准误差
+apply(d2x, 2, function(x) sd(x, na.rm = TRUE) / sqrt(length(x)))
+# 计算 d2p 每列的平均值
+colMeans(d2p, na.rm = TRUE)
+# 计算 d2p 每列的标准误差
+apply(d2p, 2, function(x) sd(x, na.rm = TRUE) / sqrt(length(x)))
+
+
+n <- 500
+m <- 200
+repetitions <- 100
+#environment <- rep(c(rep(0, n), rep(1, n)), 1)
+X1 <- rbinom(n, 1, 0.5)
+X2 <- rnorm(n, 0, 1)
+X <- cbind(X1, X2)
+
+vpop <- sqrt(0.05)
+xc <- c(vpop,vpop)
+g_pop <- X %*% xc
+va <- sqrt(0.40)
+vaa <- sqrt(0.60 )
+Ga <- matrix(NA, n, m)
+freq <- runif(m, 0.05, 0.5)
+for (i in 1:m) {
+  Ga[, i] <- rbinom(n, 2, freq[i])
+  #Ga[, i] <- Ga[, i] - 1
+}
+Ga <- calculate_Xs(Ga)
+colnames(Ga) <- paste0("SNP", 1:m)
+Gaa <- matrix(NA, n, 3)
+Gaa[, 1] <- Ga[, 17] * Ga[, 124]
+Gaa[, 2] <- Ga[, 46] * Ga[, 163]
+Gaa[, 3] <- Ga[, 118] * Ga[, 200]
+
+ia <- c(25, 67, 124)
+ba1 <- c(va,va,va)
+ga1 <- Ga[,ia] %*% ba1
+
+baa1 <- c(vaa,vaa)
+gaa1 <- Gaa[,c(1,3)] %*% baa1
+h2 <- 0.6
+var_e <- (1/h2 - 1) *(var(ga1)+var(gaa1) )-var(g_pop)
+error <- rnorm(n, sd = sqrt(var_e))
+y <- g_pop +ga1 +gaa1 + error
+mu <- plogis(y)
+eta <- matrix(NA, n, 1)
+eta[, 1] <-ifelse(mu > 0.5, 1, 0)
+da <- cbind(y,eta,X,Gaa,Ga[,ia])
+coln <- c("y1","y2","x1","x2","SNP11","SNP22","SNP33","SNP25","SNP67","SNP124")
+
+colnames(da) <- coln
+da <- as.data.frame(da)
+model1 <- glm(y1~x1+x2+SNP11+SNP33+SNP25+SNP67+SNP124,data = da)
+summary(model1)
+model2 <- glm(y2~x1+x2+SNP11+SNP33+SNP25+SNP67+SNP124,data = da,family = binomial())
+summary(model2)
+
+g1 <- Ga[,c(25,67,124,185)]
+g1 <- rbind(g1,g1)
+g2 <- rbind(Gaa,Gaa)
+da <- as.data.frame(cbind(eta,X,environment,g1,g2))
+model <- lmer(V1~X1+X2+SNP25+SNP67+SNP124+SNP185+V9+V10+V11+(0+SNP25|environment)+(0+SNP67|environment)+(0+SNP124|environment)+(0+SNP185|environment)+(0+V9|environment)+(0+V10|environment)+(0+V11|environment),data = da)
+summary(model)
+ranef(model)
+model <- lmer(V1~X1+X2+SNP25+SNP67+SNP124+V9+V11+(0+SNP67|environment)+(0+SNP185|environment)+(0+V10|environment)+(0+V11|environment),data = da)
+summary(model)
+ranef(model)
+model <- glmer(V1~X1+X2+SNP25+SNP67+SNP124+SNP185+V9+V10+V11+(SNP67 - 1|environment)+(SNP185-1|environment)+(V10-1|environment)+(V11-1|environment),data = da,family=binomial())
+
+g1 <- Ga[,c(25,67,124,185)]
+g1 <- rbind(g1,g1)
+g2 <- rbind(Gaa,Gaa)
+da <- as.data.frame(cbind(eta,X,environment,g1,g2))
+model <- glmer(eta~X1+X2+SNP25+SNP67+SNP124+SNP185+V9+V10+V11+(0+SNP25|environment)+(0+SNP67|environment)+(0+SNP124|environment)+(0+SNP185|environment)+(0+V9|environment)+(0+V10|environment)+(0+V11|environment),data = da,family = binomial())
+summary(model)
+ranef(model)
+
+prior = list(R = list(V = 1, nu=0.002),
+             G = list(G1 = list(V = 1,nu = 1, alpha.mu = 0, alpha.V = 1000),
+                      G2 = list(V = 1,nu = 1, alpha.mu = 0, alpha.V = 1000),
+                      G3 = list(V = 1,nu = 1, alpha.mu = 0, alpha.V = 1000),
+                      G4 = list(V = 1,nu = 1, alpha.mu = 0, alpha.V = 1000),
+                      G5 = list(V = 1,nu = 1, alpha.mu = 0, alpha.V = 1000),
+                      G6 = list(V = 1,nu = 1, alpha.mu = 0, alpha.V = 1000),
+                      G7 = list(V = 1,nu = 1, alpha.mu = 0, alpha.V = 1000)
+             ))
+
+m3a.1 <- MCMCglmm(V1 ~ X1+X2+SNP25+SNP67+SNP124+SNP185+V9+V10+V11,
+                  random = ~us(SNP25):environment+us(SNP67):environment+us(SNP124):environment+us(SNP185):environment+us(V9):environment+us(V10):environment+us(V11):environment,
+                  family = "categorical",
+                  data = data, verbose = FALSE, prior = prior)
+
+prior = list(R = list(V = diag(1), nu=0.002),
+             G = list(G1 = list(V = diag(2)*0.02,nu = 3),
+                      G2 = list(V = diag(2)*0.02,nu = 3),
+                      G3 = list(V = diag(2)*0.02,nu = 3),
+                      G4 = list(V = diag(2)*0.02,nu = 3),
+                      G5 = list(V = diag(2)*0.02,nu = 3),
+                      G6 = list(V = diag(2)*0.02,nu = 3),
+                      G7 = list(V = diag(2)*0.02,nu = 3)
+             ))
+
+m3a.2 <- MCMCglmm(V1 ~ X1+X2+SNP25+SNP67+SNP124+SNP185+V9+V10+V11,
+                  random = ~us(environment):SNP25+us(environment):SNP67+us(environment):SNP124+us(environment):SNP185+us(environment):V9+us(environment):V10+us(environment):V11,
+                  family = "categorical",
+                  data = data, verbose = FALSE, prior = prior)
+
+n <- 500
+m <- 20
+
+X1 <- rbinom(n, 1, 0.5)
+X2 <- rnorm(n, 0, 1)
+X <- cbind(X1, X2)
+X <- rbind(X,X)
+g_pop <- X1+X2
+h2 <- 0.6
+vpop <- sqrt(0.05)
+xc <- c(vpop,vpop)
+g_pop <- X %*% xc
+va <- sqrt(0.20)
+vah <- sqrt(0.25)
+vaa <- sqrt(0.30 )
+vaah <- sqrt(0.25 )
+environment <- rep(c(rep(0, 500), rep(1, 500)), 1)
+Ga <- matrix(NA, n, m)
+freq <- runif(m, 0.5, 0.5)
+for (i in 1:m) {
+  Ga[, i] <- rbinom(n, 2, freq[i])
+  #Ga[, i] <- Ga[, i] - 1
+}
+#Ga <- calculate_Xs(Ga)
+
+Gaa <- matrix(NA, n, 2)
+Gaa[, 1] <- Ga[, 1] * Ga[, 17]
+Gaa[, 2] <- Ga[, 10] * Ga[, 20]
+
+ba1 <- c(va)
+ga1 <- matrix(Ga[,2]) %*% ba1
+ba2 <- c(va)
+ga2 <- matrix(Ga[,2]) %*% ba2
+
+bah1 <- c(-vah)
+gah1 <- matrix(Ga[,14]) %*% bah1
+bah2 <- c(vah)
+gah2 <- matrix(Ga[,14]) %*% bah2
+
+baa1 <- c(vaa)
+gaa1 <- matrix(Gaa[,1]) %*% baa1
+baa2 <- c(vaa)
+gaa2 <- matrix(Gaa[,1]) %*% baa2
+
+baah1 <- c(-vaah)
+gaah1 <- matrix(Gaa[,2]) %*% baah1
+baah2 <- c(vaah)
+gaah2 <- matrix(Gaa[,2]) %*% baah2
+
+ga <- c(ga1,ga2)
+gah <- c(gah1,gah2)
+gaa <- c(gaa1,gaa2)
+gaah <- c(gaah1,gaah2)
+
+var_e <- (1/h2 - 1) *(var(ga)+var(gah) +var(gaa) +var(gaah) )-var(g_pop)
+error <- rnorm(2*n, sd = sqrt(var_e))
+y <- g_pop +ga + gah +gaa + gaah  + error
+#mu <- plogis(y)
+#eta <- matrix(NA, 2*n, 1)
+#eta[, 1] <- rbinom(n, size = 1, prob = mu)
+preval <- 0.05
+break_point <- quantile(y, probs = 1-preval, na.rm = T)
+cat("prevalence is", preval, ", and the break point is", break_point, "!\n")
+eta = rep(0, 2*n)
+eta[y > break_point] = 1    # cases
+ra1 <- single.snp.score(phenotype = eta,covariate = X,environment = environment,genodata = Ga,family="binomial")
+p1 <- ra1$p_values
+X2df <- numeric(m)
+p <- numeric(m)
+one <- matrix(1,nrow = 2*n, ncol = 1)
+Gae1 <- matrix(0, nrow = 2*n, ncol = 1)
+Gae2 <- matrix(0, nrow = 2*n, ncol = 1)
+theta <- 0.0
+for (i in 1:m) {
+  #Gae_selected <- Ga[, i]
+  col_i <- Ga[, i]
+  Gae1[1:n, ] <- col_i
+  Gae2[(n+1):(2*n),] <- col_i
+  xb <- cbind(one,X,Gae1)
+  result <- glm_NR(eta, xb, "binomial",theta)
+  resultmu <- Ca_Mu(eta,xb,"binomial",result)
+  resultwii <- Ca_Wii(eta,"binomial",resultmu,result,theta)
+
+  Tscore <- t(Gae2) %*% (eta - resultmu)
+
+  XtW <- t(Gae2) * resultwii
+  approximate_var <- XtW %*% Gae2
+  X2df[i] <- t(Tscore) %*% solve(approximate_var) %*% Tscore
+
+  p[i] <- 1 - pchisq(X2df[i], 1)
+}
+xu <- cbind(ra1[["x2_values"]],ra1[["p_values"]],X2df,p)
+Saddle_Prob(Tscore, resultmu, Gae2, Cutoff=2,alpha,output="P",nodes.fixed,nodes.init,log.p=FALSE)

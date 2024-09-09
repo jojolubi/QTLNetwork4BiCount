@@ -1,0 +1,1417 @@
+library(Rcpp)
+library(RcppParallel)
+#Sys.setenv(PKG_CXXFLAGS = "-I/home/jct/R/x86_64-redhat-linux-gnu-library/4.3/RcppParallel/include")
+#sourceCpp("~/simulated/glmm/scr/par_glm.cpp")
+#sourceCpp("~/simulated/glmm/scr/score.cpp")
+library(lme4)
+library(MASS)
+library(grpreg)
+library(glmnet)
+#library(SPAtest)
+library(snpStats)
+library(qqman)
+library(ggplot2)
+library(readxl)
+library(tidyr)
+library(dplyr)
+logit <- function(x) {
+  log(x / (1 - x))
+}
+
+define_Ga <- function(genoSnpMatrix, standardization = TRUE) {
+  # Check if genoSnpMatrix is of SnpMatrix class
+  if (!inherits(genoSnpMatrix, "SnpMatrix")) {
+    stop("Input genoSnpMatrix must be of SnpMatrix class.")
+  }
+
+  # Convert genoSnpMatrix to a numeric matrix
+  Ga <- as(genoSnpMatrix, "numeric")
+
+  # Function to fill missing values with mode
+  fill_na <- function(genotype_matrix) {
+    for (col in 1:ncol(genotype_matrix)) {
+      if (anyNA(genotype_matrix[, col])) {
+        mode_value <- as.numeric(names(which.max(table(genotype_matrix[, col]))))
+        genotype_matrix[is.na(genotype_matrix[, col]), col] <- mode_value
+      }
+    }
+    return(genotype_matrix)
+  }
+
+  # Fill missing values in Ga
+  Ga <- fill_na(Ga)
+
+  # Function to flip 0s to 2s and 2s to 0s
+  flip.matrix <- function(x) {
+    zero2 <- which(x == 0)
+    two0 <- which(x == 2)
+    x[zero2] <- 2
+    x[two0] <- 0
+    return(x)
+  }
+
+  # Apply flip.matrix to Ga
+  Ga <- flip.matrix(Ga)
+
+  # Standardize Ga if standardization is TRUE
+  if (standardization) {
+    calculate_Xs <- function(Ga) {
+      n <- nrow(Ga)
+      m <- ncol(Ga)
+
+      p <- apply(Ga, 2, function(marker) {
+        A_freq <- sum(marker) / (2 * n)
+
+        return(A_freq)
+      })
+
+      #Z <- matrix(0, nrow = n, ncol = m)
+
+      # 生成 Z 矩阵
+      for (j in 1:m) {
+        if (all(Ga[, j] == 0)) {
+          next  # 如果某一列元素都为0，则跳过对该列的处理
+        }
+        pj <- p[j]
+        Ga[, j] <- (Ga[, j] - 2 * pj)/ sqrt(2*(pj * (1 - pj)))
+      }
+
+      return(Ga)
+    }
+    Ga <- calculate_Xs(Ga)
+  }
+
+  return(Ga)
+}
+
+# Example of calling define_Ga function
+# Assuming genoSnpMatrix is already defined
+# Ga_result <- define_Ga(genoSnpMatrix, standardization = TRUE) # or standardization = FALSE
+
+single.snp.score <- function(phenotype = phenotype, covariate = NULL, environment = NULL, weights = NULL,
+                             data = NULL,threshold = 0.01, theta = NULL, genodata = genodata,map = map,
+                             family = "gaussian", parallel = FALSE,num_threads = 2,filename = NULL) {
+  weight <- numeric(2)
+  # Process phenotype, covariate, and environment inputs
+  if (!is.null(data)) {
+    if (!is.data.frame(data)) {
+      stop("The 'data' input must be a data frame.")
+    }
+    if (is.character(phenotype)) {
+      phenotype <- data[[phenotype]]
+    }
+    if (!all(!is.na(phenotype) & phenotype != "" & phenotype != ".")) {
+      stop("Phenotype contains NA, empty values, or dots.")
+    }
+    if (!is.null(covariate)) {
+      if (is.character(covariate)) {
+        covariate_names <- strsplit(covariate, "\\+")[[1]]
+        covariate <- as.matrix(data[, covariate_names, drop = FALSE])
+      }
+      if (!all(!is.na(covariate) & covariate != "" & covariate != ".")) {
+        stop("Covariate contains NA, empty values, or dots.")
+      }
+      cov <- as.matrix(cbind(1, covariate))
+    } else {
+      cov <- matrix(1, nrow = length(phenotype), ncol = 1)
+    }
+    if (!is.null(environment)) {
+      environment <- data[[environment]]
+      if (!all(!is.na(environment) & environment != "" & environment != ".")) {
+        stop("Environment contains NA, empty values, or dots.")
+      }
+      envir <- length(unique(environment))
+    }else{
+      envir <- 1
+    }
+    if (!is.null(weights)) {
+      weight <- data[[weights]]
+      if (!all(!is.na(weight) & weight != "" & weight != ".")) {
+        stop("Weights contains NA, empty values, or dots.")
+      }
+    }
+  } else {
+    if (is.character(phenotype)) {
+      phenotype <- phenotype
+    }
+    if (!all(!is.na(phenotype) & phenotype != "" & phenotype != ".")) {
+      stop("Phenotype contains NA, empty values, or dots.")
+    }
+    if (!is.null(covariate)) {
+      if (!is.matrix(covariate)) {
+        covariate <- matrix(covariate, ncol = 1)
+      }
+      if (nrow(covariate) != length(phenotype)) {
+        stop("Covariate length does not match the length of phenotype.")
+      }
+
+      if (!all(!is.na(covariate) & covariate != "" & covariate != ".")) {
+        stop("Covariate contains NA, empty values, or dots.")
+      }
+      cov <- cbind(1, covariate)
+    } else {
+      cov <- matrix(1, nrow = length(phenotype), ncol = 1)
+    }
+    if (!is.null(environment)) {
+      environment <- environment
+      if (length(environment) != length(phenotype)) {
+        stop("Environment length does not match the length of phenotype.")
+      }
+
+      if (!all(!is.na(environment) & environment != "" & environment != ".")) {
+        stop("Environment contains NA, empty values, or dots.")
+      }
+      envir <- length(unique(environment))
+    }else{
+      envir <- 1
+    }
+    if (!is.null(weights)) {
+      weight <- weights
+      if (length(weight) != length(phenotype)) {
+        stop("Weights length does not match the length of phenotype.")
+      }
+
+      if (!all(!is.na(weight) & weight != "" & weight != ".")) {
+        stop("Weights contains NA, empty values, or dots.")
+      }
+    }
+  }
+
+  # Check genodata dimensions
+  if (nrow(genodata) != (length(phenotype)/envir)) {
+    stop("The number of rows in genodata must match the length of phenotype.")
+  }
+
+  if (ncol(genodata) != nrow(map)) {
+    stop("The number of columns in genodata must match the number of rows in map.")
+  }
+
+  # Check map column names
+  required_colnames <- c("chromosome", "snp.name", "cM", "position", "allele.1", "allele.2")
+  if (!all(colnames(map) == required_colnames)) {
+    stop("The column names of map must be: 'chromosome', 'snp.name', 'cM', 'position', 'allele.1', 'allele.2'. Please rename the columns accordingly.")
+  }
+
+  # Check if the 'snp.name' column in 'map' matches the column names of 'genodata' in both length and order
+  if (!identical(map$snp.name, colnames(genodata))) {
+    stop("The 'snp.name' column in 'map' does not match the column names of 'genodata' in terms of order.")
+  }
+
+  all_families <- c("gaussian", "binomial", "poisson", "negative.binomial")
+  if (!family %in% all_families) {
+    stop("Invalid family parameter. Supported families are 'gaussian', 'poisson',
+         'binomial' and 'negative.binomial'.")
+  }
+
+  if (family == "gaussian") {
+    phenotype <- scale(phenotype)
+  }
+
+  if (family == "binomial") {
+    if (any(phenotype > 1)) {
+      if (is.null(weights)) {
+        stop("Phenotype data for Binomial family must have weights specified for counts greater than 1.")
+      }else{
+        phenotype <- phenotype / weight
+      }
+    } else if (any(phenotype < 0) || any(phenotype > 1)) {
+      stop("Phenotype data for Binomial family must only contain values between 0 and 1.")
+    }
+
+    # If weights are NULL, generate weight vector
+    if (is.null(weights) && any(phenotype >= 0 & phenotype <= 1)) {
+      if (!all(phenotype %in% c(0, 1))) {
+        weight <- rep(100, length(phenotype))
+        weights <- weight
+      }
+    }
+
+  }
+
+  if (family == "poisson" || family == "negative.binomial") {
+    if (any(phenotype < 0)) {
+      stop("Phenotype data for '", family, "' family must be non-negative.")
+    }
+  }
+  if (family == "negative.binomial") {
+    if (is.null(theta)) {
+      ml <- glm.nb(phenotype ~ covariate)
+      theta <- ml$theta
+    }else{
+      theta <- theta
+    }
+
+  }else{
+    theta <- 0.0
+  }
+
+  ra <- glm_NR(phenotype,weight, cov, family,theta)
+  ramu <- Ca_Mu(phenotype,weight,  cov, family, ra)
+  rawii <- Ca_Wii(phenotype,weight,  family, ramu,ra,theta)
+  #Calculate ra1 using score_test function
+  if(!is.null(covariate)){
+    tXcW <-  t(covariate) * rawii
+    if (qr(tXcW %*% covariate)$rank == ncol(tXcW %*% covariate)) {
+      XtWXc_inv <- solve(tXcW %*% covariate)
+    } else {
+      XtWXc_inv <- ginv(tXcW %*% covariate)
+    }
+    proj <- covariate %*% XtWXc_inv %*% tXcW
+  }else{
+    proj <-matrix(0,ncol(cov),ncol(cov))
+  }
+  RcppParallel::setThreadOptions(numThreads = num_threads)
+  ra1 <- score_test(phenotype, ramu, rawii, genodata,proj,ra,family, envir, threshold,theta,epistasis_test = FALSE, parallel = parallel)
+
+  #Create matrices and store p_values and x2 values
+  snp_name <- as.matrix(colnames(genodata))
+  chromosome <- as.matrix(map[,1])
+  position <- as.matrix(map[,4])
+  x2_values <- as.matrix(ra1$x2)
+  p_values <- as.matrix(ra1$p_value)
+
+  gwasp1 <- cbind(snp_name, chromosome, position, x2_values, p_values)
+  colnames(gwasp1) <- c("SNP", "CHR", "BP", "X2", "P")
+
+  # 如果指定了文件名，则输出到文件
+  if (!is.null(filename)) {
+    write.table(gwasp1, file = filename, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+  }
+
+  # Set row names of matrices as column names of genodata
+  rownames(p_values) <- colnames(genodata)
+  rownames(x2_values) <- colnames(genodata)
+  colnames(p_values) <- paste0("P.", envir, "df")
+  colnames(x2_values) <- paste0("Chi.squared.", envir, "df")
+  # Return the matrices
+  if (family == "negative.binomial") {
+    return(list(gwas1D = gwasp1 ,p_values = p_values, x2_values = x2_values,theta = theta))
+  }else{
+    return(list(gwas1D = gwasp1 ,p_values = p_values, x2_values = x2_values))
+  }
+
+}
+
+epi.snp.score <- function(significantASNP = NULL, phenotype = phenotype, covariate = NULL, environment = NULL,
+                          weights = NULL, data = NULL,threshold = 0.01,theta = NULL,genodata = genodata,
+                          map = map,family = "gaussian", parallel = FALSE, num_threads = 2, filename = NULL) {
+
+  weight <- numeric(2)
+  # Process phenotype, covariate, and environment inputs
+  if (!is.null(data)) {
+    if (!is.data.frame(data)) {
+      stop("The 'data' input must be a data frame.")
+    }
+    if (is.character(phenotype)) {
+      phenotype <- data[[phenotype]]
+    }
+    if (!all(!is.na(phenotype) & phenotype != "" & phenotype != ".")) {
+      stop("Phenotype contains NA, empty values, or dots.")
+    }
+    if (!is.null(covariate)) {
+      if (is.character(covariate)) {
+        covariate_names <- strsplit(covariate, "\\+")[[1]]
+        covariate <- as.matrix(data[, covariate_names, drop = FALSE])
+      }
+      if (!all(!is.na(covariate) & covariate != "" & covariate != ".")) {
+        stop("Covariate contains NA, empty values, or dots.")
+      }
+      cov <- as.matrix(cbind(1, covariate))
+    } else {
+      cov <- matrix(1, nrow = length(phenotype), ncol = 1)
+    }
+    if (!is.null(environment)) {
+      environment <- data[[environment]]
+      if (!all(!is.na(environment) & environment != "" & environment != ".")) {
+        stop("Environment contains NA, empty values, or dots.")
+      }
+      envir <- length(unique(environment))
+    }else{
+      envir <- 1
+    }
+    if (!is.null(weights)) {
+      weight <- data[[weights]]
+      if (!all(!is.na(weight) & weight != "" & weight != ".")) {
+        stop("Weights contains NA, empty values, or dots.")
+      }
+    }
+  } else {
+    if (is.character(phenotype)) {
+      phenotype <- phenotype
+    }
+    if (!all(!is.na(phenotype) & phenotype != "" & phenotype != ".")) {
+      stop("Phenotype contains NA, empty values, or dots.")
+    }
+    if (!is.null(covariate)) {
+      if (!is.matrix(covariate)) {
+        covariate <- matrix(covariate, ncol = 1)
+      }
+      if (nrow(covariate) != length(phenotype)) {
+        stop("Covariate length does not match the length of phenotype.")
+      }
+
+      if (!all(!is.na(covariate) & covariate != "" & covariate != ".")) {
+        stop("Covariate contains NA, empty values, or dots.")
+      }
+      cov <- cbind(1, covariate)
+    } else {
+      cov <- matrix(1, nrow = length(phenotype), ncol = 1)
+    }
+    if (!is.null(environment)) {
+      environment <- environment
+      if (length(environment) != length(phenotype)) {
+        stop("Environment length does not match the length of phenotype.")
+      }
+
+      if (!all(!is.na(environment) & environment != "" & environment != ".")) {
+        stop("Environment contains NA, empty values, or dots.")
+      }
+      envir <- length(unique(environment))
+    }else{
+      envir <- 1
+    }
+    if (!is.null(weights)) {
+      weight <- weights
+      if (length(weight) != length(phenotype)) {
+        stop("Weights length does not match the length of phenotype.")
+      }
+
+      if (!all(!is.na(weight) & weight != "" & weight != ".")) {
+        stop("Weights contains NA, empty values, or dots.")
+      }
+    }
+  }
+
+  # Check genodata dimensions
+  if (nrow(genodata) != (length(phenotype)/envir)) {
+    stop("The number of rows in genodata must match the length of phenotype.")
+  }
+
+  if (ncol(genodata) != nrow(map)) {
+    stop("The number of columns in genodata must match the number of rows in map.")
+  }
+
+  # Check map column names
+  required_colnames <- c("chromosome", "snp.name", "cM", "position", "allele.1", "allele.2")
+  if (!all(colnames(map) == required_colnames)) {
+    stop("The column names of map must be: 'chromosome', 'snp.name', 'cM', 'position', 'allele.1', 'allele.2'. Please rename the columns accordingly.")
+  }
+
+  # Check if the 'snp.name' column in 'map' matches the column names of 'genodata' in both length and order
+  if (!identical(map$snp.name, colnames(genodata))) {
+    stop("The 'snp.name' column in 'map' does not match the column names of 'genodata' in terms of order.")
+  }
+
+  all_families <- c("gaussian", "binomial", "poisson", "negative.binomial")
+  if (!family %in% all_families) {
+    stop("Invalid family parameter. Supported families are 'gaussian', 'poisson',
+         'binomial' and 'negative.binomial'.")
+  }
+
+  if (family == "gaussian") {
+    phenotype <- scale(phenotype)
+  }
+  # if (family == "binomial") {
+  #   if (is.null(weights)) {
+  #     if (any(phenotype < 0) || any(phenotype > 1)) {
+  #       stop("Phenotype data for Binomial family must only contain values between 0 and 1.")
+  #     }
+  #   } else {
+  #     if (any(phenotype < 0)) {
+  #       stop("Phenotype data for 'binomial' family must be non-negative.")
+  #     }
+  #   }
+  # }
+  if (family == "binomial") {
+    if (any(phenotype > 1)) {
+      if (is.null(weights)) {
+        stop("Phenotype data for Binomial family must have weights specified for counts greater than 1.")
+      }else{
+        phenotype <- phenotype / weight
+      }
+    } else if (any(phenotype < 0) || any(phenotype > 1)) {
+      stop("Phenotype data for Binomial family must only contain values between 0 and 1.")
+    }
+
+    # If weights are NULL, generate weight vector
+    if (is.null(weights) && any(phenotype >= 0 & phenotype <= 1)) {
+      if (!all(phenotype %in% c(0, 1))) {
+        weight <- rep(100, length(phenotype))
+        weights <- weight
+      }
+    }
+  }
+  if (family == "poisson" || family == "negative.binomial") {
+    if (any(phenotype < 0)) {
+      stop("Phenotype data for '", family, "' family must be non-negative.")
+    }
+  }
+
+  if (!is.null(significantASNP)) {
+    Xc <- matrix(nrow = nrow(genodata), ncol = length(significantASNP))
+
+    for (i in 1:length(significantASNP)) {
+      cn <- significantASNP[i]
+      ci <- which(colnames(genodata) == cn)
+      Xc[, i] <- genodata[, ci]
+    }
+    Xcc <- matrix(nrow = (nrow(genodata)*envir), ncol = (length(significantASNP)*envir))
+    Xcc <- generateSubmatrix(Xc, envir)
+    cov <- cbind(cov,Xcc)
+    if(!is.null(covariate)){
+      covariate <- cbind(covariate,Xcc)
+    }
+  }
+  if (family == "negative.binomial") {
+    if (is.null(theta)) {
+      ml <- glm.nb(phenotype ~ cov)
+      theta <- ml$theta
+    }else{
+      theta <- theta
+    }
+
+  }else{
+    theta <- 0.0
+  }
+
+  ra <- glm_NR(phenotype,weight, cov, family,theta)
+  ramu <- Ca_Mu(phenotype,weight, cov, family, ra)
+  rawii <- Ca_Wii(phenotype,weight, family, ramu,ra,theta)
+
+  if(!is.null(covariate)){
+
+    tXcW <-  t(covariate) * rawii
+    if (qr(tXcW %*% covariate)$rank == ncol(tXcW %*% covariate)) {
+      XtWXc_inv <- solve(tXcW %*% covariate)
+    } else {
+      XtWXc_inv <- ginv(tXcW %*% covariate)
+    }
+    proj <- covariate %*% XtWXc_inv %*% tXcW
+  }else{
+    proj <- matrix(0,ncol(cov),ncol(cov))
+  }
+  #Calculate ra, ramu, rawii using provided functions
+  #Calculate ra1 using score_test function
+  RcppParallel::setThreadOptions(numThreads = num_threads)
+  ra1 <- score_test(phenotype, ramu, rawii, genodata,proj, ra,family, envir,threshold,theta, epistasis_test = TRUE, parallel = parallel)
+
+  #Create matrices and store p_values and x2 values
+  x2_values <- as.matrix(ra1$x2)
+  p_values <- as.matrix(ra1$p_value)
+  gwasp2 <- matrix(NA,nrow = length(x2_values),ncol = 8)
+
+  colna <- colnames(genodata)
+  m <- ncol(genodata)
+  #SNP <- character(m*(m-1)/2)
+
+  col_idx <- 1
+  for (i in 1:(m-1)) {
+    for (j in (i+1):m) {
+      gwasp2[col_idx,1] <- colna[i]
+      gwasp2[col_idx,2] <- map[i,1]
+      gwasp2[col_idx,3] <- map[i,4]
+      gwasp2[col_idx,4] <- colna[j]
+      gwasp2[col_idx,5] <- map[j,1]
+      gwasp2[col_idx,6] <- map[j,4]
+      #SNP[col_idx] <- paste0(colna[i],"_",colna[j])
+      col_idx <- col_idx + 1
+    }
+  }
+  gwasp2[,7] <- x2_values
+  gwasp2[,8] <- p_values
+  colnames(gwasp2) <- c("SNP1", "CHR1", "BP1","SNP2", "CHR2", "BP2", "X2", "P")
+
+  if (!is.null(filename)) {
+    write.table(gwasp2, file = filename, sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+  }
+
+  # Set row names of matrices as column names of genodata
+  #rownames(p_values) <- SNP
+  #rownames(x2_values) <- SNP
+  colnames(p_values) <- paste0("P.", envir, "df")
+  colnames(x2_values) <- paste0("Chi.squared.", envir, "df")
+  # Return the matrices
+  if (family == "negative.binomial") {
+    return(list(gwas2D = gwasp2, p_values = p_values, x2_values = x2_values,theta = theta))
+  }else{
+    return(list(gwas2D = gwasp2, p_values = p_values, x2_values = x2_values))
+  }
+
+}
+
+single.snp.estimate <- function(phenotype = phenotype, covariate = NULL, environment = NULL, weights = NULL,data = NULL,
+                                theta = NULL, genodata = genodata,map = map,Pvalues = Pvalues, Bonferr = 0.5, family = "gaussian",
+                                lasso = FALSE, selection = FALSE,estimate = FALSE, GEI_random = TRUE) {
+  weight <- numeric(2)
+  # Process phenotype, covariate, and environment inputs
+  if (!is.null(data)) {
+    if (!is.data.frame(data)) {
+      stop("The 'data' input must be a data frame.")
+    }
+    if (is.character(phenotype)) {
+      phenotype <- data[[phenotype]]
+    }
+    if (!all(!is.na(phenotype) & phenotype != "" & phenotype != ".")) {
+      stop("Phenotype contains NA, empty values, or dots.")
+    }
+    if (!is.null(covariate)) {
+      if (is.character(covariate)) {
+        covariate_names <- strsplit(covariate, "\\+")[[1]]
+        covariate <- as.matrix(data[, covariate_names, drop = FALSE])
+      }
+      if (!all(!is.na(covariate) & covariate != "" & covariate != ".")) {
+        stop("Covariate contains NA, empty values, or dots.")
+      }
+      cov <- as.matrix(cbind(1, covariate))
+    } else {
+      cov <- matrix(1, nrow = length(phenotype), ncol = 1)
+    }
+
+    if (!is.null(environment)) {
+      environment <- data[[environment]]
+      if (!all(!is.na(environment) & environment != "" & environment != ".")) {
+        stop("Environment contains NA, empty values, or dots.")
+      }
+      envir <- length(unique(environment))
+      environment <- factor(environment)
+      ename <-  levels(environment)
+    }else{
+      envir <- 1
+    }
+    if (!is.null(weights)) {
+      weight <- data[[weights]]
+      if (!all(!is.na(weight) & weight != "" & weight != ".")) {
+        stop("Weights contains NA, empty values, or dots.")
+      }
+    }
+  } else {
+    if (is.character(phenotype)) {
+      phenotype <- phenotype
+    }
+    if (!all(!is.na(phenotype) & phenotype != "" & phenotype != ".")) {
+      stop("Phenotype contains NA, empty values, or dots.")
+    }
+    if (!is.null(covariate)) {
+      if (!is.matrix(covariate)) {
+        covariate <- matrix(covariate, ncol = 1)
+      }
+      if (nrow(covariate) != length(phenotype)) {
+        stop("Covariate length does not match the length of phenotype.")
+      }
+
+      if (!all(!is.na(covariate) & covariate != "" & covariate != ".")) {
+        stop("Covariate contains NA, empty values, or dots.")
+      }
+      cov <- cbind(1, covariate)
+    } else {
+      cov <- matrix(1, nrow = length(phenotype), ncol = 1)
+    }
+    if (!is.null(environment)) {
+      environment <- environment
+      if (length(environment) != length(phenotype)) {
+        stop("Environment length does not match the length of phenotype.")
+      }
+
+      if (!all(!is.na(environment) & environment != "" & environment != ".")) {
+        stop("Environment contains NA, empty values, or dots.")
+      }
+      environment <- factor(environment)
+      envir <- length(unique(environment))
+      ename <-  levels(environment)
+    }else{
+      envir <- 1
+    }
+    if (!is.null(weights)) {
+      weight <- weights
+      if (length(weight) != length(phenotype)) {
+        stop("Weights length does not match the length of phenotype.")
+      }
+
+      if (!all(!is.na(weight) & weight != "" & weight != ".")) {
+        stop("Weights contains NA, empty values, or dots.")
+      }
+    }
+  }
+
+  all_families <- c("gaussian", "binomial", "poisson", "negative.binomial")
+  if (!family %in% all_families) {
+    stop("Invalid family parameter. Supported families are 'gaussian', 'poisson',
+         'binomial' and 'negative.binomial'.")
+  }
+
+  # Check genodata dimensions
+  if (nrow(genodata) != (length(phenotype)/envir)) {
+    stop("The number of rows in genodata must match the length of phenotype.")
+  }
+
+  if (ncol(genodata) != nrow(map)) {
+    stop("The number of columns in genodata must match the number of rows in map.")
+  }
+
+  # Check map column names
+  required_colnames <- c("chromosome", "snp.name", "cM", "position", "allele.1", "allele.2")
+  if (!all(colnames(map) == required_colnames)) {
+    stop("The column names of map must be: 'chromosome', 'snp.name', 'cM', 'position', 'allele.1', 'allele.2'. Please rename the columns accordingly.")
+  }
+
+  # Check if the 'snp.name' column in 'map' matches the column names of 'genodata' in both length and order
+  if (!identical(map$snp.name, colnames(genodata))) {
+    stop("The 'snp.name' column in 'map' does not match the column names of 'genodata' in terms of order.")
+  }
+
+  phenotype1 <- phenotype
+  if (family == "gaussian") {
+    phenotype1 <- scale(phenotype)
+  }
+  if (family == "binomial") {
+    if (any(phenotype > 1)) {
+      if (is.null(weights)) {
+        stop("Phenotype data for Binomial family must have weights specified for counts greater than 1.")
+      }else{
+        phenotype <- phenotype / weight
+        phenotype1 <- phenotype
+      }
+    } else if (any(phenotype < 0) || any(phenotype > 1)) {
+      stop("Phenotype data for Binomial family must only contain values between 0 and 1.")
+    }
+
+    # If weights are NULL, generate weight vector
+    if (is.null(weights) && any(phenotype >= 0 & phenotype <= 1)) {
+      if (!all(phenotype %in% c(0, 1))) {
+        weight <- rep(100, length(phenotype))
+        weights <- weight
+      }
+    }
+  }
+  if (family == "poisson" || family == "negative.binomial") {
+    if (any(phenotype < 0)) {
+      stop("Phenotype data for '", family, "' family must be non-negative.")
+    }
+  }
+  if (family == "negative.binomial") {
+    if (is.null(theta)) {
+
+      ml <- glm.nb(phenotype ~ cov)
+      theta <- ml$theta
+
+    }else{
+      theta <- theta
+    }
+
+  }else{
+    theta <- 0.0
+  }
+  #Pvalues <- Pvalues
+  m <- ncol(genodata)
+  #Pvalues <- p.adjust(Pvalues, method = "fdr")
+  thr <- 0.5 / m
+  thr1 <- Bonferr / m
+  # 记录小于FDR阈值的索引
+  significant_l_indices <- which(Pvalues <= thr1)
+  if (length(significant_l_indices) == 0) {
+    miss <- NULL  # 将ra11赋值为空值
+    message("No significant markers found.")
+    return(miss)
+  }
+
+  if(lasso){
+    if (family == "negative.binomial" ) {
+      message("Lasso method is not applicable for negative binomial models. Performing Bonferroni correction instead.")
+      fin <- significant_l_indices
+    }else{
+      if(length(significant_l_indices) >= 2 ){
+        gs <- as.matrix(genodata[, significant_l_indices])
+        if(envir == 1){
+
+          colnames(gs)  <- significant_l_indices
+
+        }else{
+
+          gs <- generateSubmatrix(gs,envir)
+          gro <- rep(significant_l_indices,envir)
+          colnames(gs)  <- gro
+
+        }
+        if (family == "binomial" && !is.null(weights) ){
+          phe1 <- phenotype * weight
+          phe2 <- weight - phe1
+          pheno <- cbind(phe1,phe2)
+          cvobs <-  cv.glmnet(data.matrix(gs), as.matrix(pheno),family = family)
+          obs <-  glmnet(data.matrix(gs), as.matrix(pheno),family = family,lambda = cvobs$lambda.min )
+        }else{
+          cvobs <-  cv.glmnet(data.matrix(gs), as.matrix(phenotype), family = family)
+          obs <-  glmnet(data.matrix(gs), as.matrix(phenotype),  family = family,lambda = cvobs$lambda.min )
+        }
+
+        fin <- as.numeric(rownames(obs$beta)[as.numeric(obs$beta)>0])
+        fin <- unique(fin)
+      }else{
+        fin <- significant_l_indices
+      }
+    }
+
+  }
+  if (selection) {
+    # 生成阈值
+    thr2 <- (Bonferr * 0.01) / m
+    significant_s_indices <- which(Pvalues <= thr2)
+    if (length(significant_s_indices) == 0) {
+      thr2 <- (Bonferr * 0.1) / m
+      significant_s_indices <- which(Pvalues <= thr2)
+      if (length(significant_s_indices) == 0) {
+        fin <- significant_l_indices
+      }else if (identical(significant_s_indices, significant_l_indices)) {
+        fin <- significant_l_indices
+      } else {
+        significant_l_indices <- significant_l_indices - 1
+        significant_s_indices <- significant_s_indices - 1
+        # 通过向前选择法生成索引向量
+        fin <- forward_selection(phenotype1,weight, cov, genodata, family, envir, thr,theta, significant_s_indices, significant_l_indices)
+        fin <- fin + 1
+      }
+    }else if (identical(significant_s_indices, significant_l_indices)) {
+      fin <- significant_l_indices
+    } else {
+      significant_l_indices <- significant_l_indices - 1
+      significant_s_indices <- significant_s_indices - 1
+      # 通过向前选择法生成索引向量
+      fin <- forward_selection(phenotype1, weight,cov, genodata, family, envir,thr, theta, significant_s_indices, significant_l_indices)
+      fin <- fin + 1
+    }
+
+  }
+  if(!lasso & !selection){
+    fin <- significant_l_indices
+  }
+  colsnp <- colnames(genodata)[fin]
+  gwassig1 <- matrix(NA,nrow =length(fin) ,ncol = 3)
+  gwassig1[,1] <- colsnp
+  gwassig1[,2] <- map[fin,1]
+  gwassig1[,3] <- map[fin,4]
+  colnames( gwassig1) <- c("SNP", "CHR", "BP")
+  if(estimate){
+    n <- nrow(genodata)
+    allga <- matrix(NA, nrow = n * envir, ncol = length(fin))
+    for (i in 1:envir) {
+      allga[((i - 1) * n + 1):(i * n), ] <- genodata[, fin]
+    }
+
+    coly <- c("y")
+    # 创建数据框
+    if (is.null(covariate) && is.null(environment)) {
+      quan <- as.data.frame(cbind(phenotype, allga))
+      colnames(quan) <- c(coly, colsnp)
+    } else if (is.null(covariate)) {
+      quan <- as.data.frame(cbind(phenotype, environment, allga))
+      cole <- c("environment")
+      colnames(quan) <- c(coly,cole, colsnp)
+    } else if (is.null(environment)) {
+      colx <- colnames(covariate)
+
+      quan <- as.data.frame(cbind(phenotype, covariate, allga))
+      colnames(quan) <- c(coly,colx, colsnp)
+    } else {
+      colx <- colnames(covariate)
+      cole <- c("environment")
+      quan <- as.data.frame(cbind(phenotype, covariate, environment, allga))
+      colnames(quan) <- c(coly, colx, cole, colsnp)
+    }
+    if (!is.null(weights)){
+      weight <- as.matrix(weight)
+      colw <- c("frequency")
+      colnames(weight) <- colw
+      quan <- cbind(quan,weight)
+    }
+    colx <- if (!is.null(covariate)) colnames(covariate) else 1
+
+    if (envir == 1) {
+      formula <- as.formula(paste(coly, "~",paste(colx, collapse = "+"), "+", paste(colsnp, collapse = "+")))
+      # envir为1时，将covariate（如果存在的话）和allga当作固定效应，用glm函数计算
+      if (family == "binomial" && !is.null(weights) ){
+        # formula <- as.formula(paste("cbind(",coly,",",colw,"-",coly,")", "~",paste(colx, collapse = "+"), "+", paste(colsnp, collapse = "+")))
+        result <- glm(formula, data = quan,weights = frequency, family = family)
+      }else{
+        result <- glm(formula, data = quan, family = family)
+      }
+      estimates <- coef(summary(result))
+      cov_coe <- estimates[1:ncol(cov),]
+      fe_coe <- estimates[ncol(cov)+1:ncol(estimates),]
+      # std_errors <- sqrt(diag(vcov(result)))
+      # z_values <- estimates / std_errors
+      # coefficients <- data.frame(estimate = estimates, std.error = std_errors, z_value = z_values)
+      aic <- AIC(result)
+      return(list(gwas1D = gwassig1,covariate_coefficients = cov_coe ,genotype_coefficients = fe_coe, AIC = aic))
+    } else {
+      if (!GEI_random) {
+        # 生成gf矩阵
+        gf <- genodata[, fin]
+        gf <- generateSubmatrix(gf, envir)
+        # 生成列名
+        rann <- c()
+        for (e in ename) {
+          for (snp in colsnp) {
+            combination <- paste0(snp, "_", e)
+            rann <- c(rann, combination)
+          }
+        }
+        colnames(gf) <- rann
+        # 将gf加入quan数据框中，将covariate（如果存在的话）和allga当作固定效应，用glm函数计算
+        quan <- cbind(quan, gf)
+        formula <- as.formula(paste(coly, "~", paste(colx, collapse = "+"), "+", paste(colsnp, collapse = "+"),
+                                    "+",paste(rann, collapse = "+")))
+        if (family == "binomial" && !is.null(weights) ){
+          result <- glm(formula, data = quan,weights = frequency, family = family)
+        }else{
+          result <- glm(formula, data = quan, family = family)
+        }
+
+        fixed_effects <- coef(summary(result))
+        cov_coe <- fixed_effects[1:ncol(cov),]
+        fe_coe <- fixed_effects[colsnp,]
+        gei_coe <- matrix(NA,nrow = length(rann),ncol = ncol(fixed_effects))
+        colnames(gei_coe) <- colnames(fixed_effects)
+        rownames(gei_coe) <- rann
+        gei_hf <- fixed_effects[(ncol(cov)+length(colsnp)+1):nrow(fixed_effects),]
+        gei_coe[1:nrow(gei_hf),] <- gei_hf
+        #rownames(estimates) <- colnames(result$coefficients)
+        aic <- AIC(result)
+        return(list(gwas1D = gwassig1,covariate_coefficients = cov_coe ,genotype_coefficients = fe_coe,GEI_coefficients = gei_coe, AIC = aic))
+      } else {
+        formula <- as.formula(paste(coly, "~",paste(colx, collapse = "+"), "+", paste(colsnp, collapse = "+"),"+",
+                                    paste(paste0("(0 + ", colsnp, "|", cole, ")", collapse = "+"))))
+        # 使用glmer函数进行拟合
+        if(family == "gaussian"){
+          result <- lmer(formula, data = quan)
+        }else if(family == "binomial" && !is.null(weights) ){
+          result <- glmer(formula, data = quan,weights = frequency, family = family,control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000)))
+        }else{
+          result <- glmer(formula, data = quan, family = family,control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000)))
+        }
+
+        fixed_effects <- coef(summary(result))
+        colsnp_effects <- fixed_effects[colsnp,]
+        other_effects <- fixed_effects[1:ncol(cov),]
+        random_effects <- VarCorr(result)
+        #rownames(estimates) <- colnames(result$coefficients)
+        rane <- ranef(result)
+        rann <- c()
+        # 嵌套循环遍历 colsnp 和 env 的所有组合
+        for (snp in colsnp) {
+          for (e in ename) {
+            # 构建当前 SNP 和环境的组合，并将其追加到 combination_vector 中
+            combination <- paste0(snp, ":", e)
+            rann <- c(rann, combination)
+          }
+        }
+        ranv<- c()
+        # 循环遍历 random_effects 中的每个元素
+        for (env in names(rane)) {
+          for (snp in names(rane[[env]])) {
+            # 提取当前环境和SNP的效应值，并将其追加到 effect_vector 中
+            ranv <- c(ranv, rane[[env]][[snp]])
+          }
+        }
+        names(ranv) <- rann
+        aic <- AIC(result)
+        return(list(gwas1D = gwassig1,covariate_coefficients = other_effects, genotype_coefficients = colsnp_effects,
+                    GEI_coefficients = ranv, GEI_varcorr = random_effects, AIC = aic))
+      }
+    }
+
+  }else{
+
+    return(list(Sr.No = fin,gwas1D = gwassig1))
+
+  }
+}
+
+epi.snp.estimate <- function(significantASNP = NULL,phenotype = phenotype, covariate = NULL, environment = NULL,
+                             weights = NULL,data = NULL,theta = NULL, genodata = genodata,map = map,Pvalues = Pvalues,
+                             Bonferr = 0.5, family = "gaussian",lasso = FALSE,selection = FALSE,
+                             estimate = FALSE,GEI_random = TRUE) {
+  weight <- numeric(2)
+  # Process phenotype, covariate, and environment inputs
+  if (!is.null(data)) {
+    if (!is.data.frame(data)) {
+      stop("The 'data' input must be a data frame.")
+    }
+    if (is.character(phenotype)) {
+      phenotype <- data[[phenotype]]
+    }
+    if (!all(!is.na(phenotype) & phenotype != "" & phenotype != ".")) {
+      stop("Phenotype contains NA, empty values, or dots.")
+    }
+    if (!is.null(covariate)) {
+      if (is.character(covariate)) {
+        covariate_names <- strsplit(covariate, "\\+")[[1]]
+        covariate <- as.matrix(data[, covariate_names, drop = FALSE])
+      }
+      if (!all(!is.na(covariate) & covariate != "" & covariate != ".")) {
+        stop("Covariate contains NA, empty values, or dots.")
+      }
+      cov <- as.matrix(cbind(1, covariate))
+    } else {
+      cov <- matrix(1, nrow = length(phenotype), ncol = 1)
+    }
+
+    if (!is.null(environment)) {
+      environment <- data[[environment]]
+      if (!all(!is.na(environment) & environment != "" & environment != ".")) {
+        stop("Environment contains NA, empty values, or dots.")
+      }
+      envir <- length(unique(environment))
+      environment <- factor(environment)
+      ename <-  levels(environment)
+    }else{
+      envir <- 1
+    }
+    if (!is.null(weights)) {
+      weight <- data[[weights]]
+      if (!all(!is.na(weight) & weight != "" & weight != ".")) {
+        stop("Weights contains NA, empty values, or dots.")
+      }
+    }
+  } else {
+    if (is.character(phenotype)) {
+      phenotype <- phenotype
+    }
+    if (!all(!is.na(phenotype) & phenotype != "" & phenotype != ".")) {
+      stop("Phenotype contains NA, empty values, or dots.")
+    }
+    if (!is.null(covariate)) {
+      if (!is.matrix(covariate)) {
+        covariate <- matrix(covariate, ncol = 1)
+      }
+      if (nrow(covariate) != length(phenotype)) {
+        stop("Covariate length does not match the length of phenotype.")
+      }
+
+      if (!all(!is.na(covariate) & covariate != "" & covariate != ".")) {
+        stop("Covariate contains NA, empty values, or dots.")
+      }
+      cov <- cbind(1, covariate)
+    } else {
+      cov <- matrix(1, nrow = length(phenotype), ncol = 1)
+    }
+    if (!is.null(environment)) {
+      environment <- environment
+      if (length(environment) != length(phenotype)) {
+        stop("Environment length does not match the length of phenotype.")
+      }
+
+      if (!all(!is.na(environment) & environment != "" & environment != ".")) {
+        stop("Environment contains NA, empty values, or dots.")
+      }
+      environment <- factor(environment)
+      envir <- length(unique(environment))
+      ename <-  levels(environment)
+    }else{
+      envir <- 1
+    }
+    if (!is.null(weights)) {
+      weight <- weights
+      if (length(weight) != length(phenotype)) {
+        stop("Weights length does not match the length of phenotype.")
+      }
+
+      if (!all(!is.na(weight) & weight != "" & weight != ".")) {
+        stop("Weights contains NA, empty values, or dots.")
+      }
+    }
+  }
+  lencov <- ncol(cov)
+  # Check genodata dimensions
+  if (nrow(genodata) != (length(phenotype)/envir)) {
+    stop("The number of rows in genodata must match the length of phenotype.")
+  }
+
+  if (ncol(genodata) != nrow(map)) {
+    stop("The number of columns in genodata must match the number of rows in map.")
+  }
+
+  # Check map column names
+  required_colnames <- c("chromosome", "snp.name", "cM", "position", "allele.1", "allele.2")
+  if (!all(colnames(map) == required_colnames)) {
+    stop("The column names of map must be: 'chromosome', 'snp.name', 'cM', 'position', 'allele.1', 'allele.2'. Please rename the columns accordingly.")
+  }
+
+  # Check if the 'snp.name' column in 'map' matches the column names of 'genodata' in both length and order
+  if (!identical(map$snp.name, colnames(genodata))) {
+    stop("The 'snp.name' column in 'map' does not match the column names of 'genodata' in terms of order.")
+  }
+
+  all_families <- c("gaussian", "binomial", "poisson", "negative.binomial")
+  if (!family %in% all_families) {
+    stop("Invalid family parameter. Supported families are 'gaussian', 'poisson',
+         'binomial' and 'negative.binomial'.")
+  }
+  phenotype1 <- phenotype
+  if (family == "gaussian") {
+    phenotype1 <- scale(phenotype)
+  }
+  if (family == "binomial") {
+    if (any(phenotype > 1)) {
+      if (is.null(weights)) {
+        stop("Phenotype data for Binomial family must have weights specified for counts greater than 1.")
+      }else{
+        phenotype <- phenotype / weight
+        phenotype1 <- phenotype
+      }
+    } else if (any(phenotype < 0) || any(phenotype > 1)) {
+      stop("Phenotype data for Binomial family must only contain values between 0 and 1.")
+    }
+
+    # If weights are NULL, generate weight vector
+    if (is.null(weights) && any(phenotype >= 0 & phenotype <= 1)) {
+      if (!all(phenotype %in% c(0, 1))) {
+        weight <- rep(100, length(phenotype))
+        weights <- weight
+      }
+    }
+  }
+  if (family == "poisson" || family == "negative.binomial") {
+    if (any(phenotype < 0)) {
+      stop("Phenotype data for '", family, "' family must be non-negative.")
+    }
+  }
+  #gwassig1 <- ifelse(!is.null(significantASNP), matrix(NA, nrow = length(significantASNP), ncol = 3), NULL)
+  n <- nrow(genodata)
+  if (!is.null(significantASNP)) {
+    Xc <- matrix(nrow = n, ncol = length(significantASNP))
+
+    for (i in 1:length(significantASNP)) {
+      cn <- significantASNP[i]
+      ci <- which(colnames(genodata) == cn)
+      Xc[, i] <- genodata[, ci]
+    }
+    Xcc <- matrix(nrow = (n*envir), ncol = (length(significantASNP)*envir))
+    Xcc <- generateSubmatrix(Xc, envir)
+
+    cov <- cbind(cov,Xcc)
+    gwassig1 <- matrix(NA, nrow = length(significantASNP), ncol = 3)
+    significantASNP <- as.matrix(significantASNP)
+    gwassig1[,1] <- significantASNP
+    gwassig1[,2] <- map[match(significantASNP, map$snp.name),1]
+    gwassig1[,3] <- map[match(significantASNP, map$snp.name),4]
+    colnames(gwassig1) <- c("SNP", "CHR", "BP")
+
+  }
+
+  if (family == "negative.binomial") {
+    if (is.null(theta)) {
+
+      ml <- glm.nb(phenotype ~ cov)
+      theta <- ml$theta
+
+    }else{
+      theta <- theta
+    }
+
+  }else{
+    theta <- 0.0
+  }
+  m <- ncol(genodata)
+  num <- m * (m - 1) / 2
+  #Pvalues <- Pvalues
+  #Pvalues <- p.adjust(Pvalues, method = "fdr")
+  thr <- 0.5 / num
+  thr1 <- Bonferr / num
+  # 记录小于FDR阈值的索引
+  significant_l_indices <- which(Pvalues <= thr1)
+  if (length(significant_l_indices) == 0) {
+    miss <- NULL  # 将ra11赋值为空值
+    message("No significant markers found.")
+    return(miss)
+  }
+
+
+  number <- matrix(NA, nrow = num, ncol = 2)
+  col_idx <- 1
+
+  for (i in 1:(m - 1)) {
+    for (j in (i + 1):m) {
+      number[col_idx, 1] <- i
+      number[col_idx, 2] <- j
+      col_idx <- col_idx + 1
+    }
+  }
+  Gaa <- matrix(NA, nrow = n, ncol = length(significant_l_indices))
+  SNP<- character(length(significant_l_indices))
+  col_idx <- 1
+
+  for (index in significant_l_indices) {
+    i <- number[index, 1]
+    j <- number[index, 2]
+
+    SNP[col_idx] <- paste0(colnames(genodata)[i], "_", colnames(genodata)[j])
+    Gaa[, col_idx] <- genodata[, i] * genodata[, j]
+
+    col_idx <- col_idx + 1
+  }
+  colnames(Gaa) <- SNP
+
+  if(lasso){
+    if (family == "negative.binomial" ) {
+      message("Lasso method is not applicable for negative binomial models. Performing Bonferroni correction instead.")
+      fin <- 1:length(significant_l_indices)
+    }else{
+      if(length(significant_l_indices) >= 2 ){
+        fin_l <- 1:length(significant_l_indices)
+        gs <- as.matrix(Gaa)
+        if(envir == 1){
+
+          colnames(gs)  <- fin_l
+
+        }else{
+
+          gs <- generateSubmatrix(gs,envir)
+          gro <- rep(fin_l,envir)
+          colnames(gs)  <- gro
+        }
+        if (family == "binomial" && !is.null(weights) ){
+          phe1 <- phenotype * weight
+          phe2 <- weight - phe1
+          pheno <- cbind(phe1,phe2)
+          cvobs <-  cv.glmnet(data.matrix(gs), as.matrix(pheno),family = family)
+          obs <-  glmnet(data.matrix(gs), as.matrix(pheno),family = family,lambda = cvobs$lambda.min )
+
+        }else{
+          cvobs <-  cv.glmnet(gs, phenotype, family = family)
+          obs <-  glmnet(gs, phenotype,  family = family,lambda = cvobs$lambda.min )
+        }
+        fin <- as.numeric(rownames(obs$beta)[as.numeric(obs$beta)>0])
+        fin <- unique(fin)
+      }else{
+        fin <- 1:length(significant_l_indices)
+      }
+    }
+
+  }
+
+  if (selection) {
+    # 生成阈值
+    thr2 <- (Bonferr * 0.01) / num
+    significant_s_indices <- which(Pvalues <= thr2)
+    if (length(significant_s_indices) == 0) {
+      thr2 <- (Bonferr * 0.1) / num
+      significant_s_indices <- which(Pvalues <= thr2)
+      if (length(significant_s_indices) == 0) {
+        fin <- 1:length(significant_l_indices)
+      }else if (identical(significant_s_indices, significant_l_indices)) {
+        fin <- 1:length(significant_l_indices)
+      } else {
+        fin_l <- 1:length(significant_l_indices)
+        fin_s <- match(significant_s_indices, significant_l_indices)
+        fin_l <- fin_l - 1
+        fin_s <- fin_s - 1
+        # 通过向前选择法生成索引向量
+        fin <- forward_selection(phenotype1,weight, cov, Gaa,family, envir, thr,theta, fin_s, fin_l)
+        fin <- fin + 1
+      }
+    }else if (identical(significant_s_indices, significant_l_indices)) {
+      fin <- 1:length(significant_l_indices)
+    } else {
+      fin_l <- 1:length(significant_l_indices)
+      fin_s <- match(significant_s_indices, significant_l_indices)
+      fin_l <- fin_l - 1
+      fin_s <- fin_s - 1
+      # 通过向前选择法生成索引向量
+      fin <- forward_selection(phenotype1,weight, cov, Gaa,family, envir,thr, theta, fin_s, fin_l)
+      fin <- fin + 1
+    }
+
+  }
+
+  if(!lasso & !selection){
+    fin <- 1:length(significant_l_indices)
+  }
+
+
+  sli <- significant_l_indices[fin]
+  gwassig2 <- matrix(NA,nrow = length(fin),ncol = 6)
+  col_idx <- 1
+  for (index in sli) {
+    i <- number[index, 1]
+    j <- number[index, 2]
+
+    gwassig2[col_idx,1] <- colnames(genodata)[i]
+    gwassig2[col_idx,2] <- map[i,1]
+    gwassig2[col_idx,3] <- map[i,4]
+    gwassig2[col_idx,4] <- colnames(genodata)[j]
+    gwassig2[col_idx,5] <- map[j,1]
+    gwassig2[col_idx,6] <- map[j,4]
+
+    col_idx <- col_idx + 1
+  }
+  colnames( gwassig2) <- c("SNP1","CHR1", "BP1","SNP2","CHR2", "BP2")
+
+  if (!is.null(significantASNP)) {
+    Xcn <- cbind(Xc,Gaa[, fin])
+    allga <- matrix(NA, nrow = n * envir, ncol = ncol(Xcn))
+    #allga <- matrix(NA, nrow = nrow(genodata) * envir, ncol = length(fin) )
+    #Xcn <- matrix(NA, nrow = nrow(genodata) * envir,ncol =length(significantASNP))
+    for (i in 1:envir) {
+      allga[((i - 1) * n + 1):(i * n), ] <- Xcn
+      #Xcn[((i - 1) * nrow(genodata) + 1):(i * nrow(genodata)), ] <- Xc
+      #allga[((i - 1) * nrow(genodata) + 1):(i * nrow(genodata)), ] <- XcnGaa[, fin]
+    }
+    #Xc <- rbind(Xc,Xc)
+    #allga <- cbind(Xc,allga)
+    #allga <- cbind(Xcn,allga)
+    colsnp <- SNP[fin]
+    colsnp <- c(significantASNP,colsnp)
+  }else{
+    allga <- matrix(NA, nrow = n * envir, ncol = length(fin))
+    for (i in 1:envir) {
+      allga[((i - 1) * n + 1):(i * n), ] <- Gaa[, fin]
+    }
+    colsnp <- SNP[fin]
+  }
+  if(estimate){
+    coly <- c("y")
+    # 创建数据框
+    if (is.null(covariate) && is.null(environment)) {
+      quan <- as.data.frame(cbind(phenotype, allga))
+      colnames(quan) <- c(coly, colsnp)
+    } else if (is.null(covariate)) {
+      quan <- as.data.frame(cbind(phenotype, environment, allga))
+      cole <- c("environment")
+      colnames(quan) <- c(coly,cole, colsnp)
+    } else if (is.null(environment)) {
+      colx <- colnames(covariate)
+
+      quan <- as.data.frame(cbind(phenotype, covariate, allga))
+      colnames(quan) <- c(coly,colx, colsnp)
+    } else {
+      colx <- colnames(covariate)
+      cole <- c("environment")
+      quan <- as.data.frame(cbind(phenotype, covariate, environment, allga))
+      colnames(quan) <- c(coly, colx, cole, colsnp)
+    }
+    if (!is.null(weights)){
+      weight <- as.matrix(weight)
+      colw <- c("frequency")
+      colnames(weight) <- colw
+      quan <- cbind(quan,weight)
+    }
+    colx <- if (!is.null(covariate)) colnames(covariate) else 1
+
+    if (envir == 1) {
+      formula <- as.formula(paste(coly, "~",paste(colx, collapse = "+"), "+", paste(colsnp, collapse = "+")))
+      # envir为1时，将covariate（如果存在的话）和allga当作固定效应，用glm函数计算
+      if (family == "binomial" && !is.null(weights) ){
+        # formula <- as.formula(paste("cbind(",coly,",",colw,"-",coly,")", "~",paste(colx, collapse = "+"), "+", paste(colsnp, collapse = "+")))
+        result <- glm(formula, data = quan,weights = frequency, family = family)
+      }else{
+        result <- glm(formula, data = quan, family = family)
+      }
+      estimates <- coef(summary(result))
+      cov_coe <- estimates[1:lencov,]
+      fe_coe <- estimates[colsnp,]
+
+      aic <- AIC(result)
+      if (!is.null(significantASNP)) {
+        return(list(gwas1D = gwassig1,gwas2D = gwassig2,covariate_coefficients = cov_coe ,genotype_coefficients = fe_coe, AIC = aic))
+      }else{
+        return(list(gwas2D = gwassig2,covariate_coefficients = cov_coe ,genotype_coefficients = fe_coe, AIC = aic))
+      }
+    } else {
+      if (!GEI_random) {
+        # 生成gf矩阵
+        gf <- as.matrix(allga[1:n, ])
+        gf <- generateSubmatrix(gf, envir)
+
+        # 生成列名
+        rann <- c()
+        for (e in ename) {
+          for (snp in colsnp) {
+            combination <- paste0(snp, "_", e)
+            rann <- c(rann, combination)
+          }
+        }
+        colnames(gf) <- rann
+
+        # 将gf加入quan数据框中，将covariate（如果存在的话）和allga当作固定效应，用glm函数计算
+        quan <- cbind(quan, gf)
+        formula <- as.formula(paste(coly, "~", paste(colx, collapse = "+"), "+", paste(colsnp, collapse = "+"),
+                                    "+",paste(rann, collapse = "+")))
+        if (family == "binomial" && !is.null(weights) ){
+          result <- glm(formula, data = quan,weights = frequency, family = family)
+        }else{
+          result <- glm(formula, data = quan, family = family)
+        }
+        fixed_effects <- coef(summary(result))
+        cov_coe <- fixed_effects[1:lencov,]
+        fe_coe <- fixed_effects[colsnp,]
+        gei_coe <- matrix(NA,nrow = length(rann),ncol = ncol(fixed_effects))
+        colnames(gei_coe) <- colnames(fixed_effects)
+        rownames(gei_coe) <- rann
+        gei_hf <- fixed_effects[(lencov+length(colsnp)+1):nrow(fixed_effects),]
+        gei_coe[1:nrow(gei_hf),] <-  gei_hf
+
+        #rownames(estimates) <- colnames(result$coefficients)
+        aic <- AIC(result)
+        if (!is.null(significantASNP)) {
+          return(list(gwas1D = gwassig1,gwas2D = gwassig2,covariate_coefficients = cov_coe ,genotype_coefficients = fe_coe,GEI_coefficients = gei_coe, AIC = aic))
+        }else{
+          return(list(gwas2D = gwassig2,covariate_coefficients = cov_coe ,genotype_coefficients = fe_coe,GEI_coefficients = gei_coe, AIC = aic))
+        }
+      } else {
+        # 使用glmer函数进行拟合
+        formula <- as.formula(paste(coly, "~",paste(colx, collapse = "+"), "+", paste(colsnp, collapse = "+"),"+",
+                                    paste(paste0("(0 + ", colsnp, "|", cole, ")", collapse = "+"))))
+        # 使用glmer函数进行拟合
+        if(family == "gaussian"){
+          result <- lmer(formula, data = quan)
+        }else if(family == "binomial" && !is.null(weights) ){
+          result <- glmer(formula, data = quan,weights = frequency, family = family,control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000)))
+        }else{
+          result <- glmer(formula, data = quan, family = family,control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000)))
+        }
+        fixed_effects <- coef(summary(result))
+        other_effects <- fixed_effects[1:lencov,]
+        colsnp_effects <- fixed_effects[colsnp,]
+        random_effects <- VarCorr(result)
+        #rownames(estimates) <- colnames(result$coefficients)
+        rane <- ranef(result)
+        rann <- c()
+        # 嵌套循环遍历 colsnp 和 env 的所有组合
+        for (snp in colsnp) {
+          for (e in ename) {
+            # 构建当前 SNP 和环境的组合，并将其追加到 combination_vector 中
+            combination <- paste0(snp, ":", e)
+            rann <- c(rann, combination)
+          }
+        }
+        ranv<- c()
+        # 循环遍历 random_effects 中的每个元素
+        for (env in names(rane)) {
+          for (snp in names(rane[[env]])) {
+            # 提取当前环境和SNP的效应值，并将其追加到 effect_vector 中
+            ranv <- c(ranv, rane[[env]][[snp]])
+          }
+        }
+        names(ranv) <- rann
+        aic <- AIC(result)
+        e_vector <- significant_l_indices[fin]
+        if (!is.null(significantASNP)) {
+          return(list(gwas1D = gwassig1,Sr.No = e_vector,gwas2D = gwassig2,covariate_coefficients = other_effects, genotype_coefficients = colsnp_effects,
+                      GEI_coefficients = ranv, GEI_varcorr = random_effects, AIC = aic))
+        }else{
+          return(list(Sr.No = e_vector,gwas2D = gwassig2,covariate_coefficients = other_effects, genotype_coefficients = colsnp_effects,
+                      GEI_coefficients = ranv, GEI_varcorr = random_effects, AIC = aic))
+        }
+
+      }
+    }
+
+  }else{
+    e_vector <- significant_l_indices[fin]
+    if (!is.null(significantASNP)) {
+      return(list(gwas1D = gwassig1,Sr.No = e_vector,gwas2D = gwassig2))
+    }else{
+      return(list(Sr.No = e_vector,gwas2D = gwassig2))
+    }
+  }
+
+}

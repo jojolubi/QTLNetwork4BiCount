@@ -1,0 +1,27 @@
+Package: GLMGEX
+Type: Package
+Title: GLMGEX: A tool for epistasis and gene-environment interaction association analysis in discrete traits
+Version: 0.1.0
+Depends: R (>= 3.5.0)
+Author: Chengting Jin
+Maintainer: Chengting <jinct661@gmail.com>
+Description: More about what it does (maybe more than one line)
+    Use four spaces when indenting paragraphs within the Description.
+License: GPL (>=3)
+Encoding: UTF-8
+Imports:
+    Rcpp (>= 1.0.12),
+    lme4,
+    MASS,
+    snpStats,
+    RcppParallel,
+    methods,
+    glmnet
+Suggest:
+    ggplot2,
+    readxl,
+    qqman,
+    tidyverse
+LinkingTo: Rcpp, RcppEigen, RcppParallel
+LazyData: true
+RoxygenNote: 7.3.2

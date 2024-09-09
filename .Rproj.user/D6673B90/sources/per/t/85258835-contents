@@ -1,0 +1,497 @@
+// [[Rcpp::depends(RcppEigen)]]
+#include <Rcpp.h>
+#include <RcppEigen.h>
+#include <memory>
+#include <Eigen/Dense>
+
+using namespace Rcpp;
+using namespace Eigen;
+// [[Rcpp::plugins("cpp11")]]
+
+// This is a simple example of exporting a C++ function to R. You can
+// source this function into an R session using the Rcpp::sourceCpp
+// function (or via the Source button on the editor toolbar). Learn
+// more about Rcpp at:
+//
+//   http://www.rcpp.org/
+//   http://adv-r.had.co.nz/Rcpp.html
+//   http://gallery.rcpp.org/
+//
+
+class In_LFun {
+public:
+  virtual double operator()(double eta) const = 0;
+};
+
+// 伯努利分布的逆连接函数
+class B_In_LFun : public In_LFun {
+public:
+  double operator()(double eta) const {
+    return 1.0 / (1.0 + exp(-eta));
+  }
+};
+
+// 泊松分布的逆连接函数
+class P_In_LFun : public In_LFun {
+public:
+  double operator()(double eta) const {
+    return exp(eta);
+  }
+};
+
+// W矩阵的基类
+class Ca_W {
+public:
+  virtual Eigen::VectorXd operator()(Eigen::VectorXd mu) const = 0;
+};
+
+// 高斯分布的W矩阵
+class G_Ca_W : public Ca_W {
+public:
+  Eigen::VectorXd operator()(Eigen::VectorXd mu) const {
+    int n = mu.size();
+    double v = (mu.array() - mu.mean()).square().sum() / (n - 1);
+    double v1 = 1 / v;
+    Eigen::VectorXd wii = Eigen::VectorXd::Constant(n, v1);
+    return wii;
+  }
+};
+
+// 伯努利分布的W矩阵
+class B_Ca_W : public Ca_W {
+public:
+  Eigen::VectorXd operator()(Eigen::VectorXd mu) const {
+    return mu.array() * (1 - mu.array());
+  }
+};
+
+class B2_Ca_W : public Ca_W {
+public:
+  Eigen::VectorXd nn;
+
+  // 构造函数，接受 nn 向量作为参数并初始化
+  B2_Ca_W(const Eigen::VectorXd& nn) : nn(nn) {}
+
+  Eigen::VectorXd operator()(Eigen::VectorXd mu) const {
+    int n = mu.size();
+    Eigen::VectorXd one_minus_mu = Eigen::VectorXd::Constant(n, 1.0) - mu.cwiseQuotient(nn);
+    Eigen::VectorXd wii = mu.cwiseProduct(one_minus_mu);
+    return wii;
+  }
+};
+
+// 泊松分布的W矩阵
+class P_Ca_W : public Ca_W {
+public:
+  Eigen::VectorXd operator()(Eigen::VectorXd mu) const {
+    return mu;
+  }
+};
+
+class N_Ca_W : public Ca_W {
+public:
+  double a;
+  Eigen::VectorXd y;
+
+  N_Ca_W(double a) :  a(a) {}
+
+  Eigen::VectorXd operator()(Eigen::VectorXd mu) const {
+
+    Eigen::VectorXd W = mu.array() / (1 + a * mu.array());
+
+    return W;
+  }
+};
+
+// A向量的基类
+class Ca_A {
+public:
+  virtual Eigen::VectorXd operator()(Eigen::VectorXd y, Eigen::VectorXd mu) const = 0;
+};
+
+// 伯努利分布的A向量
+class B_Ca_A : public Ca_A {
+public:
+  Eigen::VectorXd operator()(Eigen::VectorXd y, Eigen::VectorXd mu) const {
+    return y - mu;
+  }
+};
+
+class N_Ca_A : public Ca_A {
+public:
+  double a;
+
+  N_Ca_A(double a) : a(a) {}
+
+  Eigen::VectorXd operator()(Eigen::VectorXd y, Eigen::VectorXd mu) const {
+    return (y - mu).array() / (1 + a * mu.array());
+  }
+};
+
+//Execute the iteration process
+// [[Rcpp::export]]
+Eigen::VectorXd glm_NR(Eigen::VectorXd y,Eigen::VectorXd nn, Eigen::MatrixXd X,
+                       std::string family,double a) {
+  int maxIter = 500;
+  double tol = 1e-6;
+  int n = X.rows();
+  int p = X.cols();
+  int iter;
+  // Eigen::MatrixXd nX(n, p + 1);
+  // nX << Eigen::MatrixXd::Ones(n, 1), X;
+
+  Eigen::VectorXd beta(p);
+  beta.setZero();
+  if (family == "gaussian") {
+    Eigen::MatrixXd XtX = X.transpose() * X;
+    Eigen::VectorXd Xty = X.transpose() * y;
+
+    Eigen::VectorXd beta = XtX.fullPivLu().solve(Xty);
+    return beta;
+
+  } else if (family == "binomial") {
+
+    if (!nn.isZero() && y.maxCoeff() > 1) {
+      double mean_y = y.sum() / nn.sum();
+      beta[0] = std::log(mean_y / (1 - mean_y));
+    } else {
+      double meanY = y.mean();
+      beta[0] = log(meanY / (1 - meanY));
+    }
+
+  } else if (family == "poisson" || family == "negative.binomial") {
+    beta[0] = log(y.mean());
+  } else {
+    Rcpp::stop("Unsupported family type");
+  }
+  //std::cout << "beta: " << beta.transpose() << std::endl;
+
+  // 根据family选择逆连接函数和公式计算函数
+  std::unique_ptr<In_LFun> inlfunc = nullptr;
+  std::unique_ptr<Ca_W> cawc = nullptr;
+  std::unique_ptr<Ca_A> caac = nullptr;
+
+  if(family == "binomial") {
+    inlfunc = std::unique_ptr<B_In_LFun>(new B_In_LFun());
+    caac = std::unique_ptr<B_Ca_A>(new B_Ca_A());
+
+    if (!nn.isZero() && y.maxCoeff() > 1) {
+      cawc = std::unique_ptr<B2_Ca_W>(new B2_Ca_W(nn));
+    } else {
+      cawc = std::unique_ptr<B_Ca_W>(new B_Ca_W());
+    }
+
+  } else if (family == "poisson") {
+    inlfunc = std::unique_ptr<P_In_LFun>(new P_In_LFun());
+    cawc = std::unique_ptr<P_Ca_W>(new P_Ca_W());
+    caac = std::unique_ptr<B_Ca_A>(new B_Ca_A());
+  } else if (family == "negative.binomial") {
+    inlfunc = std::unique_ptr<P_In_LFun>(new P_In_LFun());
+    cawc = std::unique_ptr<N_Ca_W>(new N_Ca_W(a));
+    caac = std::unique_ptr<N_Ca_A>(new N_Ca_A(a));
+  } else {
+    Rcpp::stop("Unsupported family type");
+  }
+    // 执行迭代过程
+    for (int iter = 0; iter < maxIter; ++iter) {
+      // Calculate eta and mu vectors based on the link function and inverse link function
+
+      Eigen::VectorXd eta = X * beta;
+      Eigen::VectorXd mu(n);
+
+      if (family == "binomial" && (!nn.isZero() && y.maxCoeff() > 1)) {
+        for (int i = 0; i < n; ++i) {
+          mu[i] = (*inlfunc)(eta[i]) * nn[i];
+        }
+      }else{
+        for (int i = 0; i < n; ++i) {
+          mu[i] = (*inlfunc)(eta[i]);
+        }
+      }
+
+      //std::cout << "mu:\n " << mu << std::endl;
+      // 根据协变量矩阵X和mu向量计算W矩阵
+      Eigen::VectorXd W = (*cawc)(mu);
+      //std::cout << "w:\n " << W << std::endl;
+      // 根据响应变量y和mu向量计算得分统计量A
+      Eigen::VectorXd A = (*caac)(y, mu);
+
+      Eigen::MatrixXd J = X.transpose() * W.asDiagonal() * X;
+      //std::cout << "j:\n " << J << std::endl;
+      Eigen::VectorXd U = X.transpose() * A;
+      // Update the parameter vector beta
+      Eigen::VectorXd nbeta = beta + J.fullPivLu().solve(U);
+      //std::cout << "nbeta: " << nbeta.transpose() << std::endl;
+      // Check for convergence
+      //double diff = sqrt(dot(nbeta - beta,nbeta - beta) / dot(nbeta,beta));
+      double diff = (nbeta - beta).norm() / beta.norm();
+      //std::cout << "diff " << diff << std::endl;
+      if (diff < tol) {
+        break;
+      }
+
+      // Update the parameter vector beta
+      beta = nbeta;
+    }
+
+
+  // Check if the iteration did not converge
+  if (iter == maxIter) {
+    Rcpp::warning("Newton-Raphson iteration did not converge.");
+  }
+
+  return beta;
+}
+
+// [[Rcpp::export]]
+Eigen::VectorXd Ca_Mu(Eigen::VectorXd  y,Eigen::VectorXd nn, Eigen::MatrixXd X, std::string family,
+                      Eigen::VectorXd  beta) {
+  int n = X.rows();
+  int p = X.cols();
+
+  // 在X矩阵的第一列添加全为1的一列
+  // NumericMatrix newX(n, p + 1);
+  // newX(_, 0) = 1.0;
+  // for (int j = 0; j < p; ++j) {
+  //   newX(_, j + 1) = X(_, j);
+  // }
+  // Eigen::MatrixXd nX(n, p + 1);
+  // nX.col(0).setOnes();
+  // nX.block(0, 1, n, p) = X;
+
+  // 创建逆连接函数对象
+  std::unique_ptr<In_LFun> inlfunc = nullptr;
+  if (family == "gaussian") {
+    //inlfunc = new G_In_LFun();
+    Eigen::VectorXd mu = X * beta;
+    return mu;
+
+  } else if (family == "binomial") {
+    inlfunc = std::unique_ptr<B_In_LFun>(new B_In_LFun());
+  } else if (family == "poisson" || family == "negative.binomial") {
+    inlfunc = std::unique_ptr<P_In_LFun>(new P_In_LFun());
+  } else {
+    throw std::runtime_error("Invalid family type");
+  }
+
+  // 计算mu向量
+  Eigen::VectorXd eta = X * beta;
+  Eigen::VectorXd mu(n);
+
+    for (int i = 0; i < n; ++i) {
+      mu[i] = (*inlfunc)(eta[i]);
+    }
+
+  return mu;
+}
+
+double pcss(Eigen::VectorXd y, Eigen::VectorXd mu, int p) {
+  int N = y.size();
+  double fi = 0.0;
+
+  for (int i = 0; i < N; ++i) {
+    double nr = pow(y[i] - mu[i], 2);
+    double dr = mu[i] * (N - p);
+    fi += nr / dr;
+  }
+
+  return fi;
+}
+
+// [[Rcpp::export]]
+Eigen::VectorXd Ca_Wii(Eigen::VectorXd y,Eigen::VectorXd nn, std::string family,
+                       Eigen::VectorXd mu,Eigen::VectorXd beta,double a) {
+int n = y.size();
+int p =beta.size();
+  // 创建W矩阵计算函数对象
+  std::unique_ptr<Ca_W> cawc = nullptr;
+  if (family == "gaussian") {
+    // int n = y.size();
+    // double v = (y.array() - y.mean()).square().sum() / (n - 1);
+    // double v1 = 1 / v;
+    // Eigen::VectorXd Wii = Eigen::VectorXd::Constant(n, v1);
+    //cawc = std::unique_ptr<G_Ca_W>(new G_Ca_W());
+    Eigen::VectorXd Wii = Eigen::VectorXd::Ones(n);
+    return Wii;
+
+  } else if (family == "binomial") {
+    cawc = std::unique_ptr<B_Ca_W>(new B_Ca_W());
+  } else if (family == "poisson") {
+    cawc = std::unique_ptr<P_Ca_W>(new P_Ca_W());
+  } else if (family == "negative.binomial") {
+    cawc = std::unique_ptr<N_Ca_W>(new N_Ca_W(a));
+  }else {
+    throw std::runtime_error("Invalid family type");
+  }
+
+  // 计算W对角元素向量
+  Eigen::VectorXd Wii = (*cawc)(mu);
+  // if (family == "poisson") {
+  //   double fi = pcss(y, mu, p);
+  //   Wii /= fi;
+  // }
+  return Wii;
+}
+
+MatrixXd generateSubmatrix(const Eigen::MatrixXd& X, int envir) {
+  int n = X.rows();
+  int m = X.cols();
+  MatrixXd Xs(n * envir, m * envir);
+  Xs.setZero();
+  for (int j = 0; j < envir; j++) {
+    Xs.block(j * n, j * m, n, m) = X;
+  }
+
+  return Xs;
+}
+
+double score(Eigen::VectorXd y,Eigen::VectorXd nn, Eigen::MatrixXd X, std::string family,
+             Eigen::VectorXd beta,double a) {
+  int n = X.rows();
+  int p = X.cols();
+
+  // 在X矩阵的第一列添加全为1的一列
+  // Eigen::MatrixXd nX(n, p + 1);
+  // nX.col(0).setOnes();
+  // nX.block(0, 1, n, p) = X;
+
+  // 计算mu向量和Wii向量
+  Eigen::VectorXd mu = Ca_Mu(y,nn, X, family, beta);
+  Eigen::VectorXd Wii = Ca_Wii(y,nn, family, mu,beta,a);
+  std::unique_ptr<Ca_A> caac = nullptr;
+  if(family == "negative.binomial") {
+    caac = std::unique_ptr<N_Ca_A>(new N_Ca_A(a));
+  } else {
+    caac = std::unique_ptr<B_Ca_A>(new B_Ca_A());
+  }
+  Eigen::VectorXd A = (*caac)(y, mu);
+  // if (family == "poisson") {
+  //   double fi = pcss(y, mu, p);
+  //   A /= fi;
+  // }
+  // 计算得分统计量U和J
+  Eigen::VectorXd U = X.transpose() * A;
+  Eigen::MatrixXd J = X.transpose() * Wii.asDiagonal() * X;
+
+  // 计算得分检验的分数
+  double score = U.transpose() * J.inverse() * U;
+
+  if (family == "poisson") {
+  double fi = pcss(y, mu, p);
+  score /= fi;
+  }
+
+  return score;
+}
+
+Eigen::VectorXd SE(Eigen::VectorXd y,Eigen::VectorXd nn, Eigen::MatrixXd X, std::string family,
+                   Eigen::VectorXd beta,double a) {
+  int n = X.rows();
+  int p = X.cols();
+
+  // 在X矩阵的第一列添加全为1的一列
+  // Eigen::MatrixXd nX(n, p + 1);
+  // nX.col(0).setOnes();
+  // nX.block(0, 1, n, p) = X;
+
+  // 计算mu向量和Wii向量
+  Eigen::VectorXd mu = Ca_Mu(y,nn, X, family, beta);
+  Eigen::VectorXd Wii = Ca_Wii(y,nn, family, mu,beta,a);
+
+  Eigen::MatrixXd J = X.transpose() * Wii.asDiagonal() * X;
+
+  Eigen::VectorXd se = J.inverse().diagonal().cwiseSqrt();
+
+  return se;
+}
+
+Eigen::VectorXd wald(Eigen::VectorXd beta, Eigen::VectorXd se) {
+  // 计算Wald统计量
+  Eigen::VectorXd w = (beta.array() / se.array()).square();
+
+  return w;
+}
+
+// [[Rcpp::export]]
+Eigen::VectorXi forward_selection(const Eigen::VectorXd& y,const Eigen::VectorXd& nn,
+                                  const Eigen::MatrixXd& X,const Eigen::MatrixXd& G,
+                                  const std::string& family, int envir,
+                                  double threshold, double a , Eigen::VectorXi& x_indices,
+                                  Eigen::VectorXi& y_indices) {
+  int n = G.rows();
+  int m = G.cols();
+  int c = X.cols();
+  int d = x_indices.size();
+  int b = y_indices.size();
+  //double threshold = 0.5 / m;
+  Eigen::VectorXi& x_selected = x_indices;
+  Eigen::VectorXi& y_remaining = y_indices;
+  if (x_indices == y_indices) {
+    return x_selected;
+  } else {
+
+  Eigen::MatrixXd nX(n * envir, d * envir + c);
+
+  Eigen::MatrixXd Xs(n * envir, d * envir);
+  Eigen::MatrixXd G_selected(n, d);
+  for (int j = 0; j < d; j++) {
+    G_selected.col(j) = G.col(x_selected(j));
+  }
+
+  Xs = generateSubmatrix(G_selected, envir);
+
+  nX << X, Xs;
+
+  while (b > 0 ) {
+    //int a = x_selected.size();
+    double min_p_value = std::numeric_limits<double>::max();
+    int min_p_index = -1;
+
+    Eigen::VectorXd beta = glm_NR(y,nn, nX, family,a);
+    beta.conservativeResize(beta.size() + envir);
+    beta.tail(envir).setZero();
+
+    for (int i = 0; i < b; i++) {
+      int index = y_remaining(i);
+      Eigen::VectorXd G_col = G.col(index);
+      Eigen::MatrixXd Xss = generateSubmatrix(G_col, envir);
+      Eigen::MatrixXd Xcs(n * envir, d * envir + c + envir);
+      Xcs << nX, Xss;
+      double s = score(y,nn, Xcs, family, beta,a);
+
+      double p_value = R::pchisq(s, envir, false, false);
+
+      if (p_value < min_p_value) {
+        min_p_value = p_value;
+        min_p_index = i;
+      }
+    }
+
+    if (min_p_value <= threshold) {
+      int selected_index = y_remaining(min_p_index);
+      x_selected.conservativeResize(d + 1);
+      x_selected(d) = selected_index;
+
+      y_remaining.segment(min_p_index, b - min_p_index - 1) = y_remaining.segment(min_p_index + 1, b - min_p_index - 1);
+      y_remaining.conservativeResize(b - 1);
+
+      nX.conservativeResize(n * envir, d * envir + c + envir);
+      nX.block(0, d * envir + c, n * envir, envir) = generateSubmatrix(G.col(selected_index), envir);
+
+      d++;
+      b--;
+    } else {
+      break;
+    }
+  }
+  return x_selected;
+}
+}
+
+
+// 在Rcpp模块中导出主函数和额外的函数
+// RCPP_MODULE(glmModule) {
+//   function("glm_NR", &glm_NR);
+//   function("Ca_Mu", &Ca_Mu);
+//   function("Ca_Wii", &Ca_Wii);
+// }
