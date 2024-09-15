@@ -1,13 +1,14 @@
-#include <Rcpp.h>
-#include <RcppEigen.h>
-#include <memory>
-#include <cmath>
-#include <Eigen/Dense>
-#include <RcppParallel.h>
+#include "par_glm.h"
+// #include <Rcpp.h>
+// #include <RcppEigen.h>
+// #include <memory>
+// #include <cmath>
+// #include <Eigen/Dense>
+// #include <RcppParallel.h>
 
-using namespace Rcpp;
-using namespace Eigen;
-using namespace RcppParallel;
+// using namespace Rcpp;
+// using namespace Eigen;
+// using namespace RcppParallel;
 
 // [[Rcpp::depends(RcppEigen)]]
 // [[Rcpp::plugins("cpp11")]]
@@ -25,7 +26,6 @@ public:
     return 1.0 / (1.0 + exp(-eta));
   }
 };
-
 
 // Inverse link function for the Poisson distribution
 class P_In_LFun : public In_LFun {
@@ -570,91 +570,67 @@ std::vector<std::tuple<int, int>> getIndices(int m) {
 }
 
 // Custom worker class for parallel computation
-struct ScoreTestWorker : public Worker {
-  const Eigen::VectorXd y;
-  const Eigen::VectorXd mu;
-  const Eigen::VectorXd Wii;
-  const Eigen::MatrixXd G;
-  const Eigen::VectorXd u;
-  const Eigen::MatrixXd& proj;
-  const double b;
-  const int envir;
-  bool epistasis_test;
-  Eigen::VectorXd& x2;
-  Eigen::VectorXd& p_value;
+void ScoreTestWorker::operator()(std::size_t begin, std::size_t end) {
+  // int numIterations = end - begin;
+  // lor.resize(numIterations, envir);
+  // odds_ratio.resize(numIterations, envir);
+  // se.resize(numIterations, envir);
+  // z_value.resize(numIterations, envir);
 
-  //std::size_t begin;
-  //std::size_t end;
-  ScoreTestWorker(const Eigen::VectorXd& y, const Eigen::VectorXd& mu,
-                  const Eigen::VectorXd& Wii,const Eigen::MatrixXd& G,
-                  const Eigen::VectorXd& u,const Eigen::MatrixXd& proj,
-                  const double b, const int envir,bool epistasis_test,
-                  Eigen::VectorXd& x2, Eigen::VectorXd& p_value)
-    : y(y), mu(mu), Wii(Wii), G(G),u(u),proj(proj),b(b), envir(envir), epistasis_test(epistasis_test),
-      x2(x2), p_value(p_value) {}
+  if (!epistasis_test) {
 
-  void operator()(std::size_t begin, std::size_t end) {
-    // int numIterations = end - begin;
-    // lor.resize(numIterations, envir);
-    // odds_ratio.resize(numIterations, envir);
-    // se.resize(numIterations, envir);
-    // z_value.resize(numIterations, envir);
-
-    if (!epistasis_test) {
-
-      for (std::size_t i = begin; i < end; i++) {
-        VectorXd X = G.col(i);
-        MatrixXd Xs = generateSubmatrix(X,envir);
-        //MatrixXd Xs = MatrixXd::Zero(y.size(), envir); // Xs变为(envir*n)×envir矩阵
-        // for (int j = 0; j < envir; j++) {
-        //   Xs.col(j) = G.col(i).segment(j * y.size(), y.size()); // Xs的每一列为对应环境的G列
-        // }
-        //
-        VectorXd Tscore = Xs.transpose() * u; // Tscore向量是envir×1
-        MatrixXd varT = Xs.transpose() * Wii.asDiagonal() * Xs; // varT 是envir×envir
-        MatrixXd invVarT = varT.inverse();
+    for (std::size_t i = begin; i < end; i++) {
+      VectorXd X = G.col(i);
+      MatrixXd Xs = generateSubmatrix(X,envir);
+      //MatrixXd Xs = MatrixXd::Zero(y.size(), envir); // Xs变为(envir*n)×envir矩阵
+      // for (int j = 0; j < envir; j++) {
+      //   Xs.col(j) = G.col(i).segment(j * y.size(), y.size()); // Xs的每一列为对应环境的G列
+      // }
+      //
+      VectorXd Tscore = Xs.transpose() * u; // Tscore向量是envir×1
+      MatrixXd varT = Xs.transpose() * Wii.asDiagonal() * Xs; // varT 是envir×envir
+      MatrixXd invVarT = varT.inverse();
+      x2(i) = Tscore.transpose() * invVarT * Tscore;
+      p_value(i) = R::pchisq(x2(i), envir, false, false);
+      if(p_value(i) <= b){
+        Eigen::MatrixXd Xs_proj = Xs - proj * Xs ;
+        Eigen::VectorXd Tscore = Xs_proj.transpose() * u;
+        Eigen::MatrixXd varT = Xs_proj.transpose() * Wii.asDiagonal() * Xs_proj;
+        Eigen::MatrixXd invVarT = varT.inverse();
         x2(i) = Tscore.transpose() * invVarT * Tscore;
         p_value(i) = R::pchisq(x2(i), envir, false, false);
-        if(p_value(i) <= b){
-          Eigen::MatrixXd Xs_proj = Xs - proj * Xs ;
-          Eigen::VectorXd Tscore = Xs_proj.transpose() * u;
-          Eigen::MatrixXd varT = Xs_proj.transpose() * Wii.asDiagonal() * Xs_proj;
-          Eigen::MatrixXd invVarT = varT.inverse();
-          x2(i) = Tscore.transpose() * invVarT * Tscore;
-          p_value(i) = R::pchisq(x2(i), envir, false, false);
-        }
-
-      }
-
-    }else{
-      int m = G.cols();
-      std::vector<std::tuple<int, int>> indices = getIndices(m);
-
-      for (std::size_t idx = begin; idx < end ; idx++) {
-        int i = std::get<0>(indices[idx]);
-        int j = std::get<1>(indices[idx]);
-        Eigen::VectorXd X = G.col(i).array() * G.col(j).array();
-
-        MatrixXd Xs = generateSubmatrix(X, envir);
-        VectorXd Tscore = Xs.transpose() * u;
-        MatrixXd varT = Xs.transpose() * Wii.asDiagonal() * Xs;
-        MatrixXd invVarT = varT.inverse();
-        x2(idx) = Tscore.transpose() * invVarT * Tscore;
-        p_value(idx) = R::pchisq(x2(idx), envir, false, false);
-        if(p_value(idx) <= b){
-          Eigen::MatrixXd Xs_proj = Xs - proj * Xs ;
-          Eigen::VectorXd Tscore = Xs_proj.transpose() * u;
-          Eigen::MatrixXd varT = Xs_proj.transpose() * Wii.asDiagonal() * Xs_proj;
-          Eigen::MatrixXd invVarT = varT.inverse();
-          x2(idx) = Tscore.transpose() * invVarT * Tscore;
-          p_value(idx) = R::pchisq(x2(idx), envir, false, false);
-        }
-
       }
 
     }
+
+  }else{
+    int m = G.cols();
+    std::vector<std::tuple<int, int>> indices = getIndices(m);
+
+    for (std::size_t idx = begin; idx < end ; idx++) {
+      int i = std::get<0>(indices[idx]);
+      int j = std::get<1>(indices[idx]);
+      Eigen::VectorXd X = G.col(i).array() * G.col(j).array();
+
+      MatrixXd Xs = generateSubmatrix(X, envir);
+      VectorXd Tscore = Xs.transpose() * u;
+      MatrixXd varT = Xs.transpose() * Wii.asDiagonal() * Xs;
+      MatrixXd invVarT = varT.inverse();
+      x2(idx) = Tscore.transpose() * invVarT * Tscore;
+      p_value(idx) = R::pchisq(x2(idx), envir, false, false);
+      if(p_value(idx) <= b){
+        Eigen::MatrixXd Xs_proj = Xs - proj * Xs ;
+        Eigen::VectorXd Tscore = Xs_proj.transpose() * u;
+        Eigen::MatrixXd varT = Xs_proj.transpose() * Wii.asDiagonal() * Xs_proj;
+        Eigen::MatrixXd invVarT = varT.inverse();
+        x2(idx) = Tscore.transpose() * invVarT * Tscore;
+        p_value(idx) = R::pchisq(x2(idx), envir, false, false);
+      }
+
+    }
+
   }
-};
+}
 
 // Summary:
 // Score test for model testing
@@ -678,9 +654,9 @@ struct ScoreTestWorker : public Worker {
 //
 // [[Rcpp::export]]
 List score_test(Eigen::VectorXd y, Eigen::VectorXd mu, Eigen::VectorXd Wii,
-                Eigen::MatrixXd G,Eigen::MatrixXd proj,Eigen::VectorXd beta,
-                const std::string family,int envir = 1,double b = 0.01, double a = 0.0,
-                bool epistasis_test = false, bool parallel = false) {
+                Eigen::MatrixXd G, Eigen::MatrixXd proj, Eigen::VectorXd beta,
+                const std::string family, int envir, double b, double a,
+                bool epistasis_test, bool parallel) {
   int m = G.cols();
   int n = y.size();
   Eigen::VectorXd x2(m);

@@ -21,7 +21,7 @@ forward_selection <- function(y, nn, X, G, family, envir, threshold, a, x_indice
   .Call('_GLMGEX_forward_selection', PACKAGE = 'GLMGEX', y, nn, X, G, family, envir, threshold, a, x_indices, y_indices)
 }
 
-score_test <- function(y, mu, Wii, G, proj, beta, family, envir = 1L, b = 0.01, a = 0.0, epistasis_test = FALSE, parallel = FALSE) {
+score_test <- function(y, mu, Wii, G, proj, beta, family, envir, b, a, epistasis_test = FALSE, parallel = FALSE) {
   .Call('_GLMGEX_score_test', PACKAGE = 'GLMGEX', y, mu, Wii, G, proj, beta, family, envir, b, a, epistasis_test, parallel)
 }
 
