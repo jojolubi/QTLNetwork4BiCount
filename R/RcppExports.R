@@ -2,27 +2,25 @@
 # Generator token: 10BE3573-1514-4C36-9D1C-5A225CD40393
 
 glm_NR <- function(y, nn, X, family, a) {
-  .Call('_GLMGEX_glm_NR', PACKAGE = 'GLMGEX', y, nn, X, family, a)
+  .Call(`_GLMGEX_glm_NR`, y, nn, X, family, a)
 }
 
 Ca_Mu <- function(y, nn, X, family, beta) {
-  .Call('_GLMGEX_Ca_Mu', PACKAGE = 'GLMGEX', y, nn, X, family, beta)
+  .Call(`_GLMGEX_Ca_Mu`, y, nn, X, family, beta)
 }
 
 Ca_Wii <- function(y, nn, family, mu, beta, a) {
-  .Call('_GLMGEX_Ca_Wii', PACKAGE = 'GLMGEX', y, nn, family, mu, beta, a)
+  .Call(`_GLMGEX_Ca_Wii`, y, nn, family, mu, beta, a)
 }
 
 generateSubmatrix <- function(X, envir) {
-  .Call('_GLMGEX_generateSubmatrix', PACKAGE = 'GLMGEX', X, envir)
+  .Call(`_GLMGEX_generateSubmatrix`, X, envir)
 }
 
 forward_selection <- function(y, nn, X, G, family, envir, threshold, a, x_indices, y_indices) {
-  .Call('_GLMGEX_forward_selection', PACKAGE = 'GLMGEX', y, nn, X, G, family, envir, threshold, a, x_indices, y_indices)
+  .Call(`_GLMGEX_forward_selection`, y, nn, X, G, family, envir, threshold, a, x_indices, y_indices)
 }
 
 score_test <- function(y, mu, Wii, G, proj, beta, family, envir, b, a, epistasis_test = FALSE, parallel = FALSE) {
-  .Call('_GLMGEX_score_test', PACKAGE = 'GLMGEX', y, mu, Wii, G, proj, beta, family, envir, b, a, epistasis_test, parallel)
+  .Call(`_GLMGEX_score_test`, y, mu, Wii, G, proj, beta, family, envir, b, a, epistasis_test, parallel)
 }
-
-
