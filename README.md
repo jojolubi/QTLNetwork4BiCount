@@ -1,13 +1,13 @@
-# GLMGEX
+# QTLNetwork4BiCount
 
 GLMGEX: A tool for epistasis and gene-environment interaction association analysis in discrete traits
 
 # Package installation
 
-The current GitHub version of GLMGEX can be installed via:
+The current GitHub version of QTLNetwork4BiCount can be installed via:
 ```
 library(devtools)
-install_github("jojolubi/GLMGEX")
+install_github("jojolubi/QTLNetwork4BiCount")
 ```
 If your Rstudio does not have the devtools package, you can download the zip file and install it locally：
 ```
