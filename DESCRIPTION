@@ -1,6 +1,6 @@
-Package: GLMGEX
+Package: QTLNetwork4BiCount
 Type: Package
-Title: GLMGEX: A tool for epistasis and gene-environment interaction association analysis in discrete traits
+Title: QTLNetwork4BiCount: A tool for epistasis and gene-environment interaction association analysis in discrete traits
 Version: 0.1.0
 Depends: R (>= 3.5.0)
 Author: Chengting Jin

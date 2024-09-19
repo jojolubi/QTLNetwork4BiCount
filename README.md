@@ -1,6 +1,6 @@
 # QTLNetwork4BiCount
 
-GLMGEX: A tool for epistasis and gene-environment interaction association analysis in discrete traits
+QTLNetwork4BiCount: A tool for epistasis and gene-environment interaction association analysis in discrete traits
 
 # Package installation
 

@@ -13,7 +13,7 @@ Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 
 // glm_NR
 Eigen::VectorXd glm_NR(Eigen::VectorXd y, Eigen::VectorXd nn, Eigen::MatrixXd X, std::string family, double a);
-RcppExport SEXP _GLMGEX_glm_NR(SEXP ySEXP, SEXP nnSEXP, SEXP XSEXP, SEXP familySEXP, SEXP aSEXP) {
+RcppExport SEXP _QTLNetwork4BiCount_glm_NR(SEXP ySEXP, SEXP nnSEXP, SEXP XSEXP, SEXP familySEXP, SEXP aSEXP) {
   BEGIN_RCPP
   Rcpp::RObject rcpp_result_gen;
   Rcpp::RNGScope rcpp_rngScope_gen;
@@ -28,7 +28,7 @@ RcppExport SEXP _GLMGEX_glm_NR(SEXP ySEXP, SEXP nnSEXP, SEXP XSEXP, SEXP familyS
 }
 // Ca_Mu
 Eigen::VectorXd Ca_Mu(Eigen::VectorXd y, Eigen::VectorXd nn, Eigen::MatrixXd X, std::string family, Eigen::VectorXd beta);
-RcppExport SEXP _GLMGEX_Ca_Mu(SEXP ySEXP, SEXP nnSEXP, SEXP XSEXP, SEXP familySEXP, SEXP betaSEXP) {
+RcppExport SEXP _QTLNetwork4BiCount_Ca_Mu(SEXP ySEXP, SEXP nnSEXP, SEXP XSEXP, SEXP familySEXP, SEXP betaSEXP) {
   BEGIN_RCPP
   Rcpp::RObject rcpp_result_gen;
   Rcpp::RNGScope rcpp_rngScope_gen;
@@ -43,7 +43,7 @@ RcppExport SEXP _GLMGEX_Ca_Mu(SEXP ySEXP, SEXP nnSEXP, SEXP XSEXP, SEXP familySE
 }
 // Ca_Wii
 Eigen::VectorXd Ca_Wii(Eigen::VectorXd y, Eigen::VectorXd nn, std::string family, Eigen::VectorXd mu, Eigen::VectorXd beta, double a);
-RcppExport SEXP _GLMGEX_Ca_Wii(SEXP ySEXP, SEXP nnSEXP, SEXP familySEXP, SEXP muSEXP, SEXP betaSEXP, SEXP aSEXP) {
+RcppExport SEXP _QTLNetwork4BiCount_Ca_Wii(SEXP ySEXP, SEXP nnSEXP, SEXP familySEXP, SEXP muSEXP, SEXP betaSEXP, SEXP aSEXP) {
   BEGIN_RCPP
   Rcpp::RObject rcpp_result_gen;
   Rcpp::RNGScope rcpp_rngScope_gen;
@@ -59,7 +59,7 @@ RcppExport SEXP _GLMGEX_Ca_Wii(SEXP ySEXP, SEXP nnSEXP, SEXP familySEXP, SEXP mu
 }
 // generateSubmatrix
 Eigen::MatrixXd generateSubmatrix(const Eigen::MatrixXd& X, int envir);
-RcppExport SEXP _GLMGEX_generateSubmatrix(SEXP XSEXP, SEXP envirSEXP) {
+RcppExport SEXP _QTLNetwork4BiCount_generateSubmatrix(SEXP XSEXP, SEXP envirSEXP) {
   BEGIN_RCPP
   Rcpp::RObject rcpp_result_gen;
   Rcpp::RNGScope rcpp_rngScope_gen;
@@ -71,7 +71,7 @@ RcppExport SEXP _GLMGEX_generateSubmatrix(SEXP XSEXP, SEXP envirSEXP) {
 }
 // forward_selection
 Eigen::VectorXi forward_selection(const Eigen::VectorXd& y, const Eigen::VectorXd& nn, const Eigen::MatrixXd& X, const Eigen::MatrixXd& G, const std::string& family, int envir, double threshold, double a, Eigen::VectorXi& x_indices, Eigen::VectorXi& y_indices);
-RcppExport SEXP _GLMGEX_forward_selection(SEXP ySEXP, SEXP nnSEXP, SEXP XSEXP, SEXP GSEXP, SEXP familySEXP, SEXP envirSEXP, SEXP thresholdSEXP, SEXP aSEXP, SEXP x_indicesSEXP, SEXP y_indicesSEXP) {
+RcppExport SEXP _QTLNetwork4BiCount_forward_selection(SEXP ySEXP, SEXP nnSEXP, SEXP XSEXP, SEXP GSEXP, SEXP familySEXP, SEXP envirSEXP, SEXP thresholdSEXP, SEXP aSEXP, SEXP x_indicesSEXP, SEXP y_indicesSEXP) {
   BEGIN_RCPP
   Rcpp::RObject rcpp_result_gen;
   Rcpp::RNGScope rcpp_rngScope_gen;
@@ -91,7 +91,7 @@ RcppExport SEXP _GLMGEX_forward_selection(SEXP ySEXP, SEXP nnSEXP, SEXP XSEXP, S
 }
 // score_test
 List score_test(Eigen::VectorXd y, Eigen::VectorXd mu, Eigen::VectorXd Wii, Eigen::MatrixXd G, Eigen::MatrixXd proj, Eigen::VectorXd beta, const std::string family, int envir, double b, double a, bool epistasis_test, bool parallel);
-RcppExport SEXP _GLMGEX_score_test(SEXP ySEXP, SEXP muSEXP, SEXP WiiSEXP, SEXP GSEXP, SEXP projSEXP, SEXP betaSEXP, SEXP familySEXP, SEXP envirSEXP, SEXP bSEXP, SEXP aSEXP, SEXP epistasis_testSEXP, SEXP parallelSEXP) {
+RcppExport SEXP _QTLNetwork4BiCount_score_test(SEXP ySEXP, SEXP muSEXP, SEXP WiiSEXP, SEXP GSEXP, SEXP projSEXP, SEXP betaSEXP, SEXP familySEXP, SEXP envirSEXP, SEXP bSEXP, SEXP aSEXP, SEXP epistasis_testSEXP, SEXP parallelSEXP) {
   BEGIN_RCPP
   Rcpp::RObject rcpp_result_gen;
   Rcpp::RNGScope rcpp_rngScope_gen;
@@ -113,16 +113,16 @@ RcppExport SEXP _GLMGEX_score_test(SEXP ySEXP, SEXP muSEXP, SEXP WiiSEXP, SEXP G
 }
 
 static const R_CallMethodDef CallEntries[] = {
-  {"_GLMGEX_glm_NR", (DL_FUNC) &_GLMGEX_glm_NR, 5},
-  {"_GLMGEX_Ca_Mu", (DL_FUNC) &_GLMGEX_Ca_Mu, 5},
-  {"_GLMGEX_Ca_Wii", (DL_FUNC) &_GLMGEX_Ca_Wii, 6},
-  {"_GLMGEX_generateSubmatrix", (DL_FUNC) &_GLMGEX_generateSubmatrix, 2},
-  {"_GLMGEX_forward_selection", (DL_FUNC) &_GLMGEX_forward_selection, 10},
-  {"_GLMGEX_score_test", (DL_FUNC) &_GLMGEX_score_test, 12},
+  {"_QTLNetwork4BiCount_glm_NR", (DL_FUNC) &_QTLNetwork4BiCount_glm_NR, 5},
+  {"_QTLNetwork4BiCount_Ca_Mu", (DL_FUNC) &_QTLNetwork4BiCount_Ca_Mu, 5},
+  {"_QTLNetwork4BiCount_Ca_Wii", (DL_FUNC) &_QTLNetwork4BiCount_Ca_Wii, 6},
+  {"_QTLNetwork4BiCount_generateSubmatrix", (DL_FUNC) &_QTLNetwork4BiCount_generateSubmatrix, 2},
+  {"_QTLNetwork4BiCount_forward_selection", (DL_FUNC) &_QTLNetwork4BiCount_forward_selection, 10},
+  {"_QTLNetwork4BiCount_score_test", (DL_FUNC) &_QTLNetwork4BiCount_score_test, 12},
   {NULL, NULL, 0}
 };
 
-RcppExport void R_init_GLMGEX(DllInfo *dll) {
+RcppExport void R_init_QTLNetwork4BiCount(DllInfo *dll) {
   R_registerRoutines(dll, NULL, CallEntries, NULL, NULL);
   R_useDynamicSymbols(dll, FALSE);
 }

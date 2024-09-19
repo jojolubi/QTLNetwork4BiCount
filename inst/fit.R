@@ -1,6 +1,6 @@
 # Load packages ----------------------------------------------------------------
 
-library(GLMGEX)
+library(QTLNetwork4BiCount)
 library(snpStats)
 library(qqman)
 
